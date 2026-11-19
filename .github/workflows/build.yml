@@ -1,14 +1,22 @@
 name: Build Release
 
-# Publicar una versión:   git tag v1.3.0 && git push origin v1.3.0
+# Publicar una versión (cualquiera de las dos):
+#   - Actions → Build Release → Run workflow, con "version" = 1.3.0
+#   - git tag v1.3.0 && git push origin v1.3.0
 #   → compila Windows y Linux y crea el Release v1.3.0 con los dos paquetes.
-# Probar sin publicar:    Actions → Build Release → Run workflow (queda como artefacto).
+#     Las apps instaladas lo ofrecen como actualización al abrir.
+# Probar sin publicar: Run workflow con "version" vacío (queda como artefacto).
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión a publicar, por ejemplo 1.3.0 (vacío = solo compilar, sin publicar)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -41,9 +49,14 @@ jobs:
 
       - name: Versión
         id: version
+        env:
+          VERSION_PEDIDA: ${{ inputs.version }}
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+          elif [[ -n "$VERSION_PEDIDA" ]]; then
+            VERSION="${VERSION_PEDIDA#v}"
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Versión inválida: $VERSION (usa 1.3.0)"; exit 1; }
           else
             VERSION="0.0.${GITHUB_RUN_NUMBER}"
           fi
@@ -131,7 +144,7 @@ jobs:
 
   release:
     needs: build
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || inputs.version != ''
     runs-on: ubuntu-latest
 
     steps:
@@ -144,13 +157,17 @@ jobs:
       - name: Crear Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_PEDIDA: ${{ inputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then TAG="$GITHUB_REF_NAME"; else TAG="v${VERSION_PEDIDA#v}"; fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --latest \
             GestorLaLoba-windows.zip \
             GestorLaLoba-linux.tar.gz \
             scripts/install-windows.ps1 \
             scripts/install-linux.sh \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Gestor La Loba $GITHUB_REF_NAME" \
+            --title "Gestor La Loba $TAG" \
             --notes-file .github/release-notes.md \
             --generate-notes

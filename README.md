@@ -28,12 +28,14 @@ La base local se actualiza sola al abrir la versión nueva.
 
 ## Publicar una versión
 
+En GitHub: **Actions → Build Release → Run workflow**, escribe la versión (por ejemplo `1.3.0`) y presiona *Run workflow*. También sirve un tag:
+
 ```bash
 git tag v1.3.0
 git push origin v1.3.0
 ```
 
-GitHub Actions ([`build.yml`](.github/workflows/build.yml)) compila Windows y Linux con `flet build` y crea el Release. Tarda unos 15 minutos y, desde ahí, todas las apps instaladas ofrecen la actualización. Para probar la compilación sin publicar: **Actions → Build Release → Run workflow**.
+GitHub Actions ([`build.yml`](.github/workflows/build.yml)) compila Windows y Linux con `flet build` y crea el Release. Tarda unos 15 minutos y, desde ahí, todas las apps instaladas ofrecen la actualización. Para probar la compilación sin publicar, usa *Run workflow* con la versión vacía.
 
 El paquete nunca lleva credenciales ni datos: el workflow los borra antes de compilar y revisa el resultado.
 
