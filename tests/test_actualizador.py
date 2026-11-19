@@ -180,3 +180,9 @@ def test_elegir_release_ignora_sincronizador_ml():
     assert act.elegir_release(releases, "1.0.0").version == "1.2.0"
     assert act.elegir_release(releases, "1.2.0") is None
     assert act.elegir_release(_release("v2.0.0"), "1.0.0").version == "2.0.0"  # un solo release
+
+
+def test_notas_sin_instrucciones_de_instalacion():
+    cuerpo = "## Novedades\n\n- Arreglo X\n\n## Instalar o actualizar\n\nDescarga el zip…"
+    assert act.solo_novedades(cuerpo) == "## Novedades\n\n- Arreglo X"
+    assert act.solo_novedades("- solo esto") == "- solo esto"

@@ -149,6 +149,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
@@ -160,6 +162,19 @@ jobs:
           VERSION_PEDIDA: ${{ inputs.version }}
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then TAG="$GITHUB_REF_NAME"; else TAG="v${VERSION_PEDIDA#v}"; fi
+          # Novedades = commits desde la versión anterior del Gestor (tags vX.Y.Z; no los sml-v del Sincronizador ML)
+          ANTERIOR=$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
+          {
+            echo "## Novedades"
+            echo
+            if [[ -n "$ANTERIOR" ]]; then
+              git log --no-merges --pretty='- %s' "$ANTERIOR..$GITHUB_SHA" | grep -v '^- Merge' || echo "- Mejoras internas"
+            else
+              echo "- Primera versión publicada"
+            fi
+            echo
+            cat .github/release-notes.md
+          } > notas.md
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --latest \
@@ -169,5 +184,4 @@ jobs:
             scripts/install-linux.sh \
             --repo "$GITHUB_REPOSITORY" \
             --title "Gestor La Loba $TAG" \
-            --notes-file .github/release-notes.md \
-            --generate-notes
+            --notes-file notas.md

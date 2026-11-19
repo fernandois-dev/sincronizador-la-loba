@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -87,13 +88,35 @@ def disponible() -> bool:
 
 
 # ── 1. buscar ─────────────────────────────────────────────────────────────────
+def _contexto_ssl() -> ssl.SSLContext:
+    """Certificados del sistema + los de certifi. El Python incluido en el programa
+    trae su propio OpenSSL, que en algunos Linux no encuentra los del sistema."""
+    contexto = ssl.create_default_context()
+    try:
+        import certifi
+        contexto.load_verify_locations(certifi.where())
+    except Exception:
+        pass
+    return contexto
+
+
+def _abrir(pedido, timeout: float):
+    return urllib.request.urlopen(pedido, timeout=timeout, context=_contexto_ssl())
+
+
 def _pedir_json(url: str, timeout: float = 8) -> dict:
     pedido = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "gestor-la-loba-actualizador",
     })
-    with urllib.request.urlopen(pedido, timeout=timeout) as resp:
+    with _abrir(pedido, timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def solo_novedades(cuerpo: str) -> str:
+    """Del texto del release, lo que va antes de las instrucciones de instalación."""
+    corte = re.search(r"(?m)^#+\s*Instalar", cuerpo)
+    return (cuerpo[:corte.start()] if corte else cuerpo).strip()
 
 
 def interpretar_release(datos: dict, version_actual: str) -> Actualizacion | None:
@@ -108,7 +131,7 @@ def interpretar_release(datos: dict, version_actual: str) -> Actualizacion | Non
         return None
     return Actualizacion(
         version=version,
-        notas=(datos.get("body") or "").strip(),
+        notas=solo_novedades(datos.get("body") or ""),
         url=asset["browser_download_url"],
         tamano=int(asset.get("size") or 0),
         pagina=datos.get("html_url") or PAGINA_RELEASES,
@@ -150,7 +173,7 @@ def descargar(act: Actualizacion, progreso=None) -> Path:
     trabajo = _carpeta_trabajo()
     archivo = trabajo / nombre_asset()
     pedido = urllib.request.Request(act.url, headers={"User-Agent": "gestor-la-loba-actualizador"})
-    with urllib.request.urlopen(pedido, timeout=60) as resp, open(archivo, "wb") as salida:
+    with _abrir(pedido, 60) as resp, open(archivo, "wb") as salida:
         total = int(resp.headers.get("Content-Length") or act.tamano or 0)
         bajado = 0
         while True:
