@@ -1,0 +1,156 @@
+name: Build Release
+
+# Publicar una versión:   git tag v1.3.0 && git push origin v1.3.0
+#   → compila Windows y Linux y crea el Release v1.3.0 con los dos paquetes.
+# Probar sin publicar:    Actions → Build Release → Run workflow (queda como artefacto).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            artifact: GestorLaLoba-linux.tar.gz
+          - os: windows-latest
+            platform: windows
+            artifact: GestorLaLoba-windows.zip
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Versión
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Versión: $VERSION"
+
+      - name: Preparar el proyecto para empaquetar
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'EOF'
+          import os, re, pathlib
+          p = pathlib.Path("pyproject.toml")
+          s = p.read_text(encoding="utf-8")
+          # La versión que muestra la app sale del tag.
+          s = re.sub(r'(?m)^version = ".*"$', f'version = "{os.environ["VERSION"]}"', s, count=1)
+          # Dentro del programa basta "flet": flet[all] trae la CLI, el cliente de escritorio y la web.
+          s = s.replace('"flet[all]==', '"flet==')
+          s = re.sub(r'(?m)^\s*"pip>=[^"]*",\n', "", s)
+          p.write_text(s, encoding="utf-8")
+          EOF
+          # Ningún dato ni credencial dentro del paquete (además del exclude de pyproject.toml).
+          rm -f data/database.db data/database_antes_flet11.db database_backup.db \
+                credentials.json apps/servidor/server_settings.cfg .env
+          grep -nE '^version|flet' pyproject.toml | head -5
+
+      - name: Dependencias de compilación (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libgtk-3-dev libblkid-dev liblzma-dev ninja-build cmake clang pkg-config
+
+      - name: Instalar Flet CLI
+        run: pip install "flet-cli==1.1.0"
+
+      # flet build descarga solo la versión de Flutter que necesita.
+      - name: Compilar
+        env:
+          PYTHONUTF8: "1"
+        run: >
+          flet build ${{ matrix.platform }}
+          --yes
+          --project gestor-la-loba
+          --product "Gestor La Loba"
+          --build-version ${{ steps.version.outputs.version }}
+          --python-version 3.13
+          --no-rich-output
+          --verbose
+
+      - name: Empaquetar (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          BUNDLE=$(find build/ -type d -name bundle | head -1)
+          [ -n "$BUNDLE" ] || { echo "No se encontró build/**/bundle"; find build -maxdepth 4 -type d; exit 1; }
+          tar -czf ${{ matrix.artifact }} -C "$BUNDLE" .
+
+      - name: Empaquetar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $release = Get-ChildItem -Path build -Recurse -Directory -Filter Release |
+            Where-Object { $_.FullName -like "*runner*" } | Select-Object -First 1
+          if (-not $release) { Get-ChildItem build -Recurse -Directory | Select-Object FullName; throw "No se encontró runner/Release" }
+          Compress-Archive -Path "$($release.FullName)\*" -DestinationPath "${{ matrix.artifact }}"
+
+      - name: Revisar que no vayan datos ni credenciales
+        run: |
+          mkdir revisar
+          if [[ "${{ matrix.artifact }}" == *.zip ]]; then
+            python -c "import zipfile;zipfile.ZipFile('${{ matrix.artifact }}').extractall('revisar')"
+          else
+            tar -xzf ${{ matrix.artifact }} -C revisar
+          fi
+          # La app viene comprimida dentro del paquete (app.zip): revisarla también.
+          find revisar -name 'app.zip' -exec python -c "import sys,zipfile;zipfile.ZipFile(sys.argv[1]).extractall('revisar/app')" {} \;
+          PROHIBIDOS=$(find revisar \( -name 'credentials.json' -o -name 'server_settings.cfg' -o -name '.env' \
+                        -o -name 'database*.db' -o -name 'ml_tokens.json' \) -print)
+          if [ -n "$PROHIBIDOS" ]; then echo "Archivos que no deben ir en el paquete:"; echo "$PROHIBIDOS"; exit 1; fi
+          echo "Tamaño: $(du -sh ${{ matrix.artifact }} | cut -f1)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Crear Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            GestorLaLoba-windows.zip \
+            GestorLaLoba-linux.tar.gz \
+            scripts/install-windows.ps1 \
+            scripts/install-linux.sh \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Gestor La Loba $GITHUB_REF_NAME" \
+            --notes-file .github/release-notes.md \
+            --generate-notes

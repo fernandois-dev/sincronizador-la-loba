@@ -1,0 +1,152 @@
+{
+  "_ayuda": "Casos de evaluación del asistente. Revisiones posibles: herramientas (todas deben usarse), alguna_herramienta (al menos una), empieza_con / contiene / no_contiene (expresiones regulares, sin distinguir mayúsculas), dato_de_herramienta (el texto debe incluir ese dato del resultado de la herramienta: detecta cifras inventadas).",
+  "casos": [
+    {
+      "id": "stock-espuma",
+      "pregunta": "¿Cuánto stock hay de espuma 2 cm densidad 15?",
+      "herramientas": [
+        "buscar_producto",
+        "consultar_stock"
+      ],
+      "contiene": [
+        "ESP0012"
+      ],
+      "dato_de_herramienta": [
+        {
+          "herramienta": "consultar_stock",
+          "campo": "productos.0.stock"
+        }
+      ]
+    },
+    {
+      "id": "no-existe-grasa",
+      "pregunta": "¿Tienen grasa antichirrido para frenos?",
+      "empieza_con": "\\**no tenemos",
+      "no_contiene": [
+        "se usa para",
+        "sirven? para",
+        "ideal para",
+        "m[aá]s indicad",
+        "recomendad[ao]s? para"
+      ]
+    },
+    {
+      "id": "sinonimo-colchoneta",
+      "pregunta": "¿Tienes colchonetas delgadas?",
+      "empieza_con": "\\**no tenemos",
+      "contiene": [
+        "espuma"
+      ]
+    },
+    {
+      "id": "no-existe-refrigerador",
+      "pregunta": "¿Venden refrigeradores?",
+      "empieza_con": "\\**no tenemos"
+    },
+    {
+      "id": "pastillas-mazda",
+      "pregunta": "¿Tienen pastillas de freno para Mazda 3 2012?",
+      "herramientas": [
+        "buscar_producto"
+      ],
+      "no_contiene": [
+        "se usa para",
+        "ideal para"
+      ]
+    },
+    {
+      "id": "compras-martillo",
+      "pregunta": "¿A qué proveedor le compramos martillos la última vez?",
+      "herramientas": [
+        "consultar_compras"
+      ],
+      "dato_de_herramienta": [
+        {
+          "herramienta": "consultar_compras",
+          "campo": "ultimas_compras.0.proveedor"
+        }
+      ]
+    },
+    {
+      "id": "compras-alicates-anio",
+      "pregunta": "¿Cuántos alicates hemos comprado este año?",
+      "herramientas": [
+        "consultar_compras"
+      ],
+      "dato_de_herramienta": [
+        {
+          "herramienta": "consultar_compras",
+          "campo": "resumen.unidades"
+        }
+      ]
+    },
+    {
+      "id": "que-comprar",
+      "pregunta": "¿Qué debería comprar esta semana?",
+      "herramientas": [
+        "sugerencias_compra"
+      ],
+      "dato_de_herramienta": [
+        {
+          "herramienta": "sugerencias_compra",
+          "campo": "por_proveedor.0.proveedor"
+        }
+      ]
+    },
+    {
+      "id": "favoritos-sin-stock",
+      "pregunta": "¿Cuántos favoritos están sin stock?",
+      "herramientas": [
+        "consultar_favoritos"
+      ],
+      "dato_de_herramienta": [
+        {
+          "herramienta": "consultar_favoritos",
+          "campo": "resumen_todos_los_favoritos.sin_stock"
+        }
+      ]
+    },
+    {
+      "id": "es-favorito",
+      "pregunta": "¿El aerosol limpiador de frenos de 400 ml es favorito?",
+      "alguna_herramienta": [
+        "buscar_producto",
+        "consultar_favoritos"
+      ],
+      "contiene": [
+        "s[ií]|favorito"
+      ]
+    },
+    {
+      "id": "vehiculo-mahindra-2012",
+      "pregunta": "¿Sabes si tenemos en stock frenos para una Mahindra 2012?",
+      "herramientas": [
+        "buscar_producto"
+      ],
+      "contiene": [
+        "mahindra"
+      ],
+      "no_contiene": [
+        "GOMRIQ",
+        "GOMA CIL"
+      ]
+    },
+    {
+      "id": "compras-engrapadora-proveedores",
+      "_origen": "12-nov, demo con Janina: inventó un filtro desde 2026-01-01 y omitió a UYUSTOOLS (registrado como proveedor, sin compras confirmadas)",
+      "pregunta": "¿A quién le hemos comprado engrapadoras?",
+      "herramientas": [
+        "consultar_compras"
+      ],
+      "contiene": [
+        "ecosa",
+        "estrellas",
+        "uyus"
+      ],
+      "no_contiene": [
+        "desde (el )?1 (de )?enero",
+        "ECOSA[^\\n]*(\\b(9|17)\\s*(u\\b|unid)|\\|\\s*(9|17)\\s*\\|)"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+SINCRONIZADOR ML - La Loba
+==========================
+
+Que hace
+--------
+Cada 5 minutos:
+  1. Ventas de Mercado Libre -> ordenes de venta confirmadas en Odoo
+     (cliente MERCADO LIBRE, referencia "ML <numero de orden>").
+  2. Stock de Odoo -> cantidad disponible de las publicaciones de Mercado Libre
+     (a mano - pendiente de entregar - stock_reserva).
+
+Indicador junto al reloj de Windows:
+  AZUL  = sin novedades
+  VERDE = hay ventas o cancelaciones de Mercado Libre que nadie ha visto
+  ROJO  = hay errores (por ejemplo, una venta con un SKU que no esta en Odoo)
+  GRIS  = pausado
+Los cambios de stock no cambian el color, pero quedan en el registro.
+
+Doble clic en el circulo: abre el panel (http://localhost:8765) con los
+movimientos, los errores, cada sincronizacion y el log.
+Clic derecho: Sincronizar ahora, Marcar como visto, Pausar, Salir.
+
+Instalacion
+-----------
+1. Descomprime esta carpeta en un lugar fijo, por ejemplo C:\SincronizadorML
+2. Copia a esa misma carpeta, desde el computador donde funciona el Gestor La Loba:
+     .env                 (necesita las lineas ML_CLIENT_ID, ML_CLIENT_SECRET,
+                           ML_REDIRECT_URI, ML_USAR_PKCE y ML_TOKENS_DRIVE_FOLDER)
+     credentials.json     (cuenta de servicio de Google)
+     server_settings.cfg  (esta en apps\servidor\ del Gestor; usa las secciones
+                           [ODOO] y [MERCADOLIBRE])
+3. Doble clic en instalar.bat
+   Crea el acceso en el Inicio de Windows (parte solo al iniciar sesion) y lo abre.
+
+La conexion con Mercado Libre se comparte por Drive: no hay que volver a autorizar.
+Solo debe haber UN sincronizador corriendo (en un solo computador).
+
+Archivos que crea
+-----------------
+  data\sincronizador_ml.db   registro de eventos (90 dias)
+  data\ml_ventas_estado.json hasta donde se revisaron las ventas
+  data\ml_tokens.json        copia local de la conexion con Mercado Libre
+  logs\app.log               log detallado (30 dias)
+
+Desinstalar: Salir desde el icono, borrar el acceso "Sincronizador ML" de
+la carpeta Inicio (Win+R, shell:startup) y borrar la carpeta.

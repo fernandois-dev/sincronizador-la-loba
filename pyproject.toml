@@ -1,0 +1,53 @@
+[project]
+name = "supersanjavier"
+version = "1.0.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "django>=5.2",
+    "djangorestframework>=3.16.0",
+    "flet[all]==1.1.0",
+    "flet-charts==1.1.0",
+    "google-api-python-client>=2.188.0",
+    "gspread>=6.2.1",
+    "pip>=25.0.1",
+    "python-barcode>=0.15.1",
+    "pywin32>=311 ; sys_platform == 'win32'",
+    "reportlab>=4.4.2",
+    "python-dotenv>=1.0.0",
+    "requests>=2.32.3",
+    "uvicorn>=0.34.1",
+    "openai>=3.40.0",
+    "numpy>=2.5.4",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.13.0",
+    "pytest>=8",
+]
+
+# ── Empaquetado con `flet build` (lo usa .github/workflows/build.yml) ─────────
+[tool.flet]
+product = "Gestor La Loba"
+company = "Ferretería La Loba"
+copyright = "Ferretería La Loba"
+
+[tool.flet.app]
+# Nada de datos ni credenciales dentro del programa: viven en la carpeta del
+# usuario (utilities/carpeta_datos.py). Tampoco pruebas ni scripts sueltos.
+exclude = [
+    "data/database.db",
+    "data/database_antes_flet11.db",
+    "data/ml_tokens.json",
+    "data/ia",
+    "database_backup.db",
+    "credentials.json",
+    "apps/servidor/server_settings.cfg",
+    "logs",
+    "tests",
+    "evals",
+    "scripts",
+    "Dockerfile",
+]

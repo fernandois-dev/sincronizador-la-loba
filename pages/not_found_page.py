@@ -1,0 +1,20 @@
+import flet as ft
+from utilities.flet_compat import PaginaFija
+
+class NotFoundPage(PaginaFija, ft.View):
+    def __init__(self, page: ft.Page, _model, params = {}):
+        super().__init__()
+        self.route = "/404"
+        self.controls = [
+            ft.Text("404 - Pageddd Not Found", size=30),
+            ft.Text("The page you're looking for doesn't exist."),
+            ft.Button("Go Home", on_click=lambda e: self.page.custom_go("/")),
+            ft.AutoComplete(
+            suggestions=[
+                ft.AutoCompleteSuggestion(key="one 1", value="One"),
+                ft.AutoCompleteSuggestion(key="two 2", value="Two"),
+                ft.AutoCompleteSuggestion(key="three 3", value="Three"),
+            ],
+            on_select=lambda e: print(e.control.selected_index, e.selection),
+        )
+        ]

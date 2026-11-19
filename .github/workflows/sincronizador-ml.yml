@@ -1,0 +1,76 @@
+name: Sincronizador ML (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, ml-sincronizador]
+    paths:
+      - 'apps/sincronizador_ml/**'
+      - 'modules/mercadolibre/**'
+      - 'logger_config.py'
+      - '.github/workflows/sincronizador-ml.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Dependencias (solo las del sincronizador)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/sincronizador_ml/requirements.txt pyinstaller
+
+      - name: Compilar SincronizadorML.exe
+        shell: pwsh
+        run: |
+          # apps/ y modules/ son paquetes "namespace" en el Gestor; para PyInstaller se marcan como paquetes normales
+          New-Item -ItemType File -Force apps/__init__.py, modules/__init__.py | Out-Null
+          pyinstaller --noconfirm --onefile --windowed --name SincronizadorML `
+            --icon apps/sincronizador_ml/icono.ico `
+            --paths . `
+            --hidden-import apps.sincronizador_ml.motor `
+            --hidden-import apps.sincronizador_ml.panel `
+            --hidden-import modules.mercadolibre.ventas `
+            --hidden-import modules.mercadolibre.stock `
+            --hidden-import modules.mercadolibre.odoo_rpc `
+            --hidden-import pystray._win32 `
+            --exclude-module django --exclude-module flet --exclude-module numpy --exclude-module tkinter `
+            apps/sincronizador_ml/main.py
+
+      - name: Probar que el .exe arranca (importaciones)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/SincronizadorML.exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { Write-Error "El .exe se cerró (código $($p.ExitCode))"; exit 1 }
+          try { $r = Invoke-WebRequest http://localhost:8765/api/estado -UseBasicParsing; Write-Host $r.Content } catch { Write-Host "Panel no respondió: $_" }
+          Stop-Process -Id $p.Id -Force
+
+      - name: Armar zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory SincronizadorML | Out-Null
+          Copy-Item dist/SincronizadorML.exe, apps/sincronizador_ml/instalar.bat, apps/sincronizador_ml/LEEME.txt SincronizadorML/
+          Compress-Archive SincronizadorML/* SincronizadorML-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SincronizadorML-windows
+          path: SincronizadorML-windows.zip
+
+      - name: Publicar release (solo main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: sml-v1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Sincronizador ML 1.0.${{ github.run_number }}
+          files: SincronizadorML-windows.zip

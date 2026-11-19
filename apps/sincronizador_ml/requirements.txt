@@ -1,0 +1,6 @@
+# Solo lo que necesita el Sincronizador ML (sin Django ni Flet)
+requests>=2.32
+python-dotenv>=1.0
+google-auth>=2.30
+pystray>=0.19
+pillow>=11
