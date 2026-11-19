@@ -34,8 +34,10 @@ from pathlib import Path
 from utilities import carpeta_datos
 
 REPO = "fernandois-dev/sincronizador-la-loba"
-# GESTOR_ACTUALIZADOR_API permite probar contra otro servidor.
-API_ULTIMA = os.getenv("GESTOR_ACTUALIZADOR_API") or f"https://api.github.com/repos/{REPO}/releases/latest"
+# Lista de releases (no /latest: el repo también publica el Sincronizador ML con
+# tags sml-v...). GESTOR_ACTUALIZADOR_API permite probar contra otro servidor;
+# puede devolver un release o una lista.
+API_RELEASES = os.getenv("GESTOR_ACTUALIZADOR_API") or f"https://api.github.com/repos/{REPO}/releases?per_page=30"
 PAGINA_RELEASES = f"https://github.com/{REPO}/releases/latest"
 
 ASSET_WINDOWS = "GestorLaLoba-windows.zip"
@@ -113,9 +115,24 @@ def interpretar_release(datos: dict, version_actual: str) -> Actualizacion | Non
     )
 
 
+def elegir_release(releases: list | dict, version_actual: str) -> Actualizacion | None:
+    """De la lista de releases, la versión más nueva del Gestor (tag vX.Y.Z) que
+    traiga paquete para este sistema y sea mayor que la actual."""
+    if isinstance(releases, dict):
+        releases = [releases]
+    candidatas = []
+    for datos in releases:
+        if not re.fullmatch(r"[vV]\d+(\.\d+){0,2}", str(datos.get("tag_name", ""))):
+            continue
+        act = interpretar_release(datos, version_actual)
+        if act:
+            candidatas.append(act)
+    return max(candidatas, key=lambda a: _numeros(a.version), default=None)
+
+
 def buscar(version_actual: str) -> Actualizacion | None:
     """Consulta GitHub. Bloqueante (usar asyncio.to_thread). Sin internet → excepción."""
-    return interpretar_release(_pedir_json(API_ULTIMA), version_actual)
+    return elegir_release(_pedir_json(API_RELEASES), version_actual)
 
 
 # ── 2. descargar ──────────────────────────────────────────────────────────────

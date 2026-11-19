@@ -74,3 +74,5 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Sincronizador ML 1.0.${{ github.run_number }}
           files: SincronizadorML-windows.zip
+          # No marcar como "último": esa marca es del Gestor (lo usa su actualizador).
+          make_latest: false

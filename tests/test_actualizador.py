@@ -168,3 +168,15 @@ def test_entorno_limpio_no_hereda_variables_de_la_app(monkeypatch):
     entorno = act.entorno_limpio()
     assert "FLET_DART_BRIDGE_PORT" not in entorno and "PYTHONHOME" not in entorno
     assert entorno["HOME_DE_PRUEBA"] == "si"
+
+
+def test_elegir_release_ignora_sincronizador_ml():
+    releases = [
+        _release("sml-v1.0.40"),            # Sincronizador ML: otro programa
+        _release("v1.3.0", prerelease=True),
+        _release("v1.2.0"),
+        _release("v1.1.0"),
+    ]
+    assert act.elegir_release(releases, "1.0.0").version == "1.2.0"
+    assert act.elegir_release(releases, "1.2.0") is None
+    assert act.elegir_release(_release("v2.0.0"), "1.0.0").version == "2.0.0"  # un solo release
