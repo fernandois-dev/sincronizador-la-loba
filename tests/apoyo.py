@@ -71,6 +71,7 @@ def _configuracion_presente():
     la máquina de pruebas no estén credentials.json ni server_settings.cfg."""
     from utilities import carpeta_datos
 
+    carpeta_datos._faltantes_real = getattr(carpeta_datos, "_faltantes_real", carpeta_datos.faltantes)
     carpeta_datos.faltantes = lambda: []
 
 
@@ -121,6 +122,8 @@ def _odoo_falso():
         return 0 if method == "search_count" else []
 
     odoo._OdooConnection.execute_kw = execute_kw
+    odoo._OdooConnection._ensure_uid_real = getattr(
+        odoo._OdooConnection, "_ensure_uid_real", odoo._OdooConnection._ensure_uid)
     odoo._OdooConnection._ensure_uid = lambda self: 1
     odoo._OdooConnection.ping = lambda self: True
     odoo._OdooConnection.is_connected = lambda self: True

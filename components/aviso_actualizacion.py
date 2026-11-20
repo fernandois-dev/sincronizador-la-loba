@@ -25,6 +25,13 @@ def revisar_al_iniciar(page: ft.Page, version_actual: str) -> None:
     """Busca una versión nueva sin bloquear el arranque. Sin internet no avisa nada."""
     if not actualizador.disponible():
         return
+    try:
+        registro = actualizador.leer_registro_pendiente()
+        if registro:
+            nivel = logging.INFO if "OK:" in registro else logging.WARNING
+            logger.log(nivel, "Registro de la última actualización:\n%s", registro)
+    except Exception:
+        logger.exception("No se pudo leer el registro de actualización")
 
     async def _revisar():
         await asyncio.sleep(3)  # que primero cargue la app

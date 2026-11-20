@@ -78,7 +78,11 @@ class PantallaPrimeraConfiguracion:
         filas = []
         for nombre, obligatorio, descripcion in carpeta_datos.ARCHIVOS:
             esta = carpeta_datos.ruta(nombre).exists()
-            if esta:
+            if esta and nombre == "server_settings.cfg" and carpeta_datos.odoo_incompleto():
+                faltan_odoo = ", ".join(carpeta_datos.odoo_incompleto())
+                icono, color = ft.Icons.ERROR_OUTLINE, ft.Colors.ERROR
+                estado = f"le falta la sección [ODOO]: {faltan_odoo}"
+            elif esta:
                 icono, color, estado = ft.Icons.CHECK_CIRCLE, ft.Colors.GREEN, "listo"
             elif obligatorio:
                 icono, color, estado = ft.Icons.ERROR_OUTLINE, ft.Colors.ERROR, "falta"

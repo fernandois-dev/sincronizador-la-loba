@@ -7,10 +7,21 @@ import subprocess
 import sys
 import tarfile
 import time
+from pathlib import Path
 
 import pytest
 
 from utilities import actualizador as act
+
+
+@pytest.fixture(autouse=True)
+def carpeta_de_datos_temporal(tmp_path_factory, monkeypatch):
+    """El registro y las descargas del actualizador van a una carpeta temporal."""
+    from utilities import carpeta_datos
+
+    carpeta = tmp_path_factory.mktemp("datos")
+    monkeypatch.setattr(carpeta_datos, "carpeta", lambda: carpeta)
+    return carpeta
 
 
 def _release(tag="v1.2.0", assets=None, **extra):
@@ -89,6 +100,7 @@ def test_script_linux_reemplaza_y_reabre(tmp_path):
     assert (programa / "otro_archivo_del_usuario.txt").read_text() == "no tocar"
     assert os.access(programa / act.EJECUTABLE, os.X_OK)
     assert not nueva.exists() and not script.exists()
+    assert "OK: app reabierta" in act.leer_registro_pendiente()
 
 
 def test_script_windows_usa_variables_de_entorno(tmp_path):
@@ -99,6 +111,9 @@ def test_script_windows_usa_variables_de_entorno(tmp_path):
     assert 'rmdir /s /q "%DESTINO%\\app"' in bat
     assert "PID eq 4321" in bat and "timeout" not in bat
     bat.encode("ascii")
+    # Con saltos LF, cmd no encuentra las etiquetas de los goto.
+    assert bat.replace("\r\n", "").count("\n") == 0
+    assert "\r\n:esperar\r\n" in bat and "\r\n:reemplazar\r\n" in bat
 
 
 def test_aviso_descarga_instala_y_cierra(monkeypatch, tmp_path, errores_log):
@@ -186,3 +201,42 @@ def test_notas_sin_instrucciones_de_instalacion():
     cuerpo = "## Novedades\n\n- Arreglo X\n\n## Instalar o actualizar\n\nDescarga el zip…"
     assert act.solo_novedades(cuerpo) == "## Novedades\n\n- Arreglo X"
     assert act.solo_novedades("- solo esto") == "- solo esto"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="script de Windows (corre en GitHub Actions)")
+def test_script_windows_reemplaza_y_reabre(tmp_path):
+    """Con cmd y robocopy reales: espera a que la "app" se cierre, reemplaza solo
+    lo que trae el paquete y la vuelve a abrir."""
+    import shutil
+
+    # La "app": ping.exe copiado con el nombre del ejecutable, abierto unos segundos.
+    ping = Path(os.environ["SystemRoot"]) / "System32" / "PING.EXE"
+    programa = tmp_path / "Programa con espacios (x86) y tildes ñ"
+    (programa / "app").mkdir(parents=True)
+    (programa / "app" / "viejo.py").write_text("viejo")
+    shutil.copy(ping, programa / "gestor-la-loba.exe")
+    (programa / "otro_archivo_del_usuario.txt").write_text("no tocar")
+
+    nueva = tmp_path / "nueva"
+    (nueva / "app").mkdir(parents=True)
+    (nueva / "app" / "nuevo.py").write_text("nuevo")
+    shutil.copy(ping, nueva / "gestor-la-loba.exe")
+
+    proceso_app = subprocess.Popen([str(programa / "gestor-la-loba.exe"), "-n", "4", "127.0.0.1"],
+                                   stdout=subprocess.DEVNULL)
+    act.aplicar(nueva, programa=programa, pid=proceso_app.pid)
+    time.sleep(1)
+    assert (programa / "app" / "viejo.py").exists(), "no debe reemplazar con la app abierta"
+    proceso_app.wait()
+
+    registro = ""
+    for _ in range(60):
+        time.sleep(1)
+        if act.ruta_registro().exists():
+            registro = act.ruta_registro().read_text(encoding="utf-8", errors="replace")
+            if "OK:" in registro or "FALLO" in registro:
+                break
+    assert "OK: app reabierta" in registro, registro
+    assert not (programa / "app" / "viejo.py").exists()
+    assert (programa / "app" / "nuevo.py").read_text() == "nuevo"
+    assert (programa / "otro_archivo_del_usuario.txt").read_text() == "no tocar"
