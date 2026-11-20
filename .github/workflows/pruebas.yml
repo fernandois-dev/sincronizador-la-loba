@@ -14,3 +14,13 @@ jobs:
       - run: uv python install 3.13
       - run: uv sync --frozen
       - run: uv run pytest -q
+
+  # El actualizador reemplaza el programa con un .bat: se prueba en Windows real.
+  actualizador-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.13
+      - run: uv sync --frozen
+      - run: uv run pytest -q tests/test_actualizador.py -p no:cacheprovider

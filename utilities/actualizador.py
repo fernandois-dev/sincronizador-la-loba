@@ -214,45 +214,72 @@ def extraer(archivo: Path, destino: Path) -> None:
 
 # ── 3. aplicar ────────────────────────────────────────────────────────────────
 def _script_windows(nueva: Path, pid: int) -> str:
-    """Script .bat. Las rutas llegan por variables de entorno (NUEVA, DESTINO)
-    para no depender de la codificación del archivo con rutas con acentos."""
-    entradas = "\n".join(
-        f'if exist "%DESTINO%\\{e.name}\\" (rmdir /s /q "%DESTINO%\\{e.name}") '
-        f'else if exist "%DESTINO%\\{e.name}" (del /f /q "%DESTINO%\\{e.name}")'
-        for e in sorted(nueva.iterdir()))
-    # Sin consola, "timeout" no funciona: se espera con ping.
-    return f"""@echo off
-set /a INTENTOS=0
-:esperar
-tasklist /FI "PID eq {pid}" /NH 2>nul | find /I "{EJECUTABLE}" >nul
-if errorlevel 1 goto reemplazar
-set /a INTENTOS+=1
-if %INTENTOS% GEQ 60 goto reemplazar
-ping -n 2 127.0.0.1 >nul
-goto esperar
-:reemplazar
-ping -n 2 127.0.0.1 >nul
-{entradas}
-robocopy "%NUEVA%" "%DESTINO%" /E /MOVE /NFL /NDL /NJH /NJS /R:5 /W:1 >nul
-start "" /D "%DESTINO%" "%DESTINO%\\{EJECUTABLE}"
-rmdir /s /q "%NUEVA%" 2>nul
-(goto) 2>nul & del "%~f0"
-"""
+    """Script .bat. Las rutas llegan por variables de entorno (NUEVA, DESTINO,
+    REGISTRO) para no depender de la codificación del archivo.
+
+    Se escribe con saltos de línea CRLF: con LF, cmd no encuentra las etiquetas
+    de los goto y el script se corta sin reemplazar nada. Cada paso queda en
+    REGISTRO (la app lo copia a su log al abrir).
+    """
+    lineas = [
+        "@echo off",
+        "setlocal",
+        'echo %date% %time% inicio: esperando que se cierre la app (PID {pid})>>"%REGISTRO%"',
+        "set /a INTENTOS=0",
+        ":esperar",
+        f'tasklist /FI "PID eq {pid}" /NH 2>nul | find /I "{EJECUTABLE}" >nul',
+        "if errorlevel 1 goto reemplazar",
+        "set /a INTENTOS+=1",
+        "if %INTENTOS% GEQ 60 goto reemplazar",
+        "ping -n 2 127.0.0.1 >nul",
+        "goto esperar",
+        ":reemplazar",
+        'echo %date% %time% app cerrada (espera %INTENTOS% s); reemplazando en %DESTINO%>>"%REGISTRO%"',
+        # margen para que Windows suelte los archivos del programa
+        "ping -n 3 127.0.0.1 >nul",
+    ]
+    for e in sorted(nueva.iterdir()):
+        destino = f'"%DESTINO%\\{e.name}"'
+        if e.is_dir():
+            lineas.append(f'if exist {destino} rmdir /s /q {destino} 2>>"%REGISTRO%"')
+        else:
+            lineas.append(f'if exist {destino} del /f /q {destino} 2>>"%REGISTRO%"')
+    lineas += [
+        'robocopy "%NUEVA%" "%DESTINO%" /E /MOVE /NFL /NDL /NJH /NJS /R:10 /W:1 >>"%REGISTRO%"',
+        "set RC=%errorlevel%",
+        'echo %date% %time% robocopy termino con codigo %RC% (menor que 8 = bien)>>"%REGISTRO%"',
+        "if %RC% GEQ 8 goto fallo",
+        f'if not exist "%DESTINO%\\{EJECUTABLE}" goto fallo',
+        f'start "" /D "%DESTINO%" "%DESTINO%\\{EJECUTABLE}"',
+        'echo %date% %time% OK: app reabierta>>"%REGISTRO%"',
+        'rmdir /s /q "%NUEVA%" 2>nul',
+        "goto fin",
+        ":fallo",
+        'echo %date% %time% FALLO: no se pudo reemplazar el programa>>"%REGISTRO%"',
+        f'if exist "%DESTINO%\\{EJECUTABLE}" start "" /D "%DESTINO%" "%DESTINO%\\{EJECUTABLE}"',
+        ":fin",
+        'endlocal',
+        '(goto) 2>nul & del "%~f0"',
+    ]
+    return "\r\n".join(lineas).replace("{pid}", str(pid)) + "\r\n"
 
 
 def _script_linux(nueva: Path, pid: int) -> str:
-    """Script sh. Las rutas llegan por variables de entorno (NUEVA, DESTINO)."""
+    """Script sh. Las rutas llegan por variables de entorno (NUEVA, DESTINO, REGISTRO)."""
     entradas = " ".join(f"'{e.name}'" for e in sorted(nueva.iterdir()))
     return f"""#!/bin/sh
+echo "$(date) inicio: esperando que se cierre la app (PID {pid})" >> "$REGISTRO"
 i=0
 while kill -0 {pid} 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
+echo "$(date) app cerrada; reemplazando en $DESTINO" >> "$REGISTRO"
 for e in {entradas}; do
   rm -rf "$DESTINO/$e"
-  mv "$NUEVA/$e" "$DESTINO/$e"
+  mv "$NUEVA/$e" "$DESTINO/$e" 2>> "$REGISTRO"
 done
 chmod +x "$DESTINO/{EJECUTABLE}"
 rm -rf "$NUEVA"
 cd "$DESTINO" && nohup "./{EJECUTABLE}" >/dev/null 2>&1 &
+echo "$(date) OK: app reabierta" >> "$REGISTRO"
 rm -f "$0"
 """
 
@@ -287,12 +314,22 @@ def aplicar(nueva: Path, programa: Path | None = None, pid: int | None = None) -
             f"No hay permiso para escribir en {programa}. Descarga la versión nueva "
             "desde la página de Releases o instala el programa en una carpeta tuya.")
     entorno = entorno_limpio()
-    entorno.update({"NUEVA": str(nueva), "DESTINO": str(programa)})
+    entorno.update({"NUEVA": str(nueva), "DESTINO": str(programa), "REGISTRO": str(ruta_registro())})
+    ruta_registro().unlink(missing_ok=True)
     if sys.platform == "win32":
         script = Path(tempfile.gettempdir()) / "actualizar_gestor_la_loba.bat"
-        script.write_text(_script_windows(nueva, pid), encoding="ascii")
-        flags = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED | NEW_GROUP | NO_WINDOW
-        subprocess.Popen(["cmd", "/c", str(script)], creationflags=flags, close_fds=True, env=entorno)
+        # Bytes tal cual: write_text en Windows convertiría \r\n en \r\r\n.
+        script.write_bytes(_script_windows(nueva, pid).encode("ascii"))
+        # Consola oculta propia (los comandos del script la heredan: sin ventanas
+        # negras) y fuera del grupo de procesos de la app, para que no se cierre con ella.
+        sin_ventana, grupo_nuevo, fuera_del_job = 0x08000000, 0x00000200, 0x01000000
+        try:
+            subprocess.Popen(["cmd", "/c", str(script)], env=entorno, close_fds=True,
+                             creationflags=sin_ventana | grupo_nuevo | fuera_del_job)
+        except OSError:
+            # El job de la app no permite salir de él: se lanza igual.
+            subprocess.Popen(["cmd", "/c", str(script)], env=entorno, close_fds=True,
+                             creationflags=sin_ventana | grupo_nuevo)
     else:
         script = Path(tempfile.gettempdir()) / "actualizar_gestor_la_loba.sh"
         script.write_text(_script_linux(nueva, pid), encoding="utf-8")
@@ -300,3 +337,18 @@ def aplicar(nueva: Path, programa: Path | None = None, pid: int | None = None) -
         subprocess.Popen(["/bin/sh", str(script)], start_new_session=True, close_fds=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=entorno)
     return script
+
+
+def ruta_registro() -> Path:
+    """Registro del script de actualización (se revisa al abrir la app)."""
+    return _carpeta_trabajo() / "registro.txt"
+
+
+def leer_registro_pendiente() -> str | None:
+    """Devuelve y borra el registro de la última actualización, si quedó uno."""
+    ruta = ruta_registro()
+    if not ruta.exists():
+        return None
+    texto = ruta.read_text(encoding="utf-8", errors="replace").strip()
+    ruta.unlink(missing_ok=True)
+    return texto or None
