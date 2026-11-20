@@ -31,7 +31,7 @@ class OdooConnectionError(Exception):
     """No se pudo establecer o mantener la conexión XML-RPC con Odoo."""
 
 
-def _load_odoo_config() -> dict:
+def _load_odoo_config(avisar: bool = True) -> dict:
     """
     Lee la sección [ODOO] de apps/servidor/server_settings.cfg.
 
@@ -44,7 +44,7 @@ def _load_odoo_config() -> dict:
     carpeta_datos.leer_ini(parser, config_path)
     cfg = {clave: parser.get("ODOO", clave, fallback="").strip() for clave in _CLAVES_ODOO}
     faltan = [clave for clave, valor in cfg.items() if not valor]
-    if faltan:
+    if faltan and avisar:
         logger.error(
             "Configuración de Odoo incompleta en %s, sección [ODOO]: faltan %s.",
             config_path, ", ".join(faltan),
@@ -80,10 +80,13 @@ class _OdooConnection:
         with self._lock:
             if self._uid:
                 return self._uid
+            # Sin sesión: se relee server_settings.cfg, por si se agregó o cambió después
+            # de abrir la app (pantalla de primera configuración o página Configuración).
+            self._cfg = _load_odoo_config(avisar=False)
             faltan = [clave for clave in _CLAVES_ODOO if not self._cfg.get(clave)]
             if faltan:
                 raise OdooConnectionError(
-                    "Falta configurar Odoo en apps/servidor/server_settings.cfg, sección [ODOO]: "
+                    f"Falta configurar Odoo en {carpeta_datos.ruta('server_settings.cfg')}, sección [ODOO]: "
                     f"{', '.join(faltan)}. Usa apps/servidor/server_settings.example.cfg como guía."
                 )
             try:

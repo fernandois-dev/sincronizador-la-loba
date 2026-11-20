@@ -89,3 +89,31 @@ def _objetos(clase):
     import gc
 
     return (o for o in gc.get_objects() if isinstance(o, clase))
+
+
+def test_odoo_relee_la_configuracion_agregada_despues(carpeta_vacia, monkeypatch):
+    """Primera apertura: Odoo se importa sin server_settings.cfg; al importarlo en la
+    pantalla de configuración, la conexión debe usarlo sin reiniciar la app."""
+    from modules.servidor import odoo
+
+    conexion = odoo._OdooConnection()
+    # apoyo.py reemplaza _ensure_uid para que las pantallas no usen la red; aquí se prueba el real.
+    ensure_uid = getattr(odoo._OdooConnection, "_ensure_uid_real", odoo._OdooConnection._ensure_uid)
+    assert conexion._cfg["url"] == ""
+
+    (carpeta_vacia / "server_settings.cfg").write_text(
+        "[ODOO]\nurl = https://ejemplo.odoo.com\ndb = base\nusername = yo\npassword = clave\n",
+        encoding="utf-8")
+    autenticado = []
+
+    class ServidorFalso:
+        def __init__(self, url, **kw):
+            self.url = url
+
+        def authenticate(self, db, usuario, clave, _):
+            autenticado.append((self.url, db, usuario, clave))
+            return 7
+
+    monkeypatch.setattr(odoo.xmlrpc.client, "ServerProxy", ServidorFalso)
+    assert ensure_uid(conexion) == 7
+    assert autenticado == [("https://ejemplo.odoo.com/xmlrpc/2/common", "base", "yo", "clave")]
