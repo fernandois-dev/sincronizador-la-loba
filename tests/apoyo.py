@@ -71,6 +71,7 @@ def _configuracion_presente():
     la máquina de pruebas no estén credentials.json ni server_settings.cfg."""
     from utilities import carpeta_datos
 
+    carpeta_datos._faltantes_real = getattr(carpeta_datos, "_faltantes_real", carpeta_datos.faltantes)
     carpeta_datos.faltantes = lambda: []
 
 

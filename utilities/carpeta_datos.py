@@ -81,10 +81,32 @@ def leer_ini(parser, ruta_archivo) -> list[str]:
         return parser.read(ruta_archivo, encoding="cp1252")
 
 
+CLAVES_ODOO = ("url", "db", "username", "password")
+
+
+def odoo_incompleto() -> list[str]:
+    """Claves de [ODOO] que faltan en server_settings.cfg ([] si está completo)."""
+    import configparser
+    cfg = configparser.ConfigParser()
+    try:
+        leer_ini(cfg, str(ruta("server_settings.cfg")))
+    except (configparser.Error, OSError):
+        return list(CLAVES_ODOO)
+    return [c for c in CLAVES_ODOO if not cfg.get("ODOO", c, fallback="").strip()]
+
+
 def faltantes() -> list[str]:
-    """Archivos obligatorios que todavía no están en la carpeta de datos."""
-    return [nombre for nombre, obligatorio, _ in ARCHIVOS
-            if obligatorio and not ruta(nombre).exists()]
+    """Archivos obligatorios que todavía no están (o, en server_settings.cfg,
+    que no traen la conexión a Odoo) en la carpeta de datos."""
+    resultado = []
+    for nombre, obligatorio, _ in ARCHIVOS:
+        if not obligatorio:
+            continue
+        if not ruta(nombre).exists():
+            resultado.append(nombre)
+        elif nombre == "server_settings.cfg" and odoo_incompleto():
+            resultado.append(nombre)
+    return resultado
 
 
 def importar(origen: str | Path) -> str:
@@ -98,10 +120,37 @@ def importar(origen: str | Path) -> str:
     destino = _reconocer(origen)
     ruta_destino = carpeta() / destino
     ruta_destino.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(origen, ruta_destino)
+    if destino == "server_settings.cfg" and ruta_destino.exists():
+        _combinar_ini(origen, ruta_destino)
+    else:
+        shutil.copyfile(origen, ruta_destino)
     if destino == ".env":
         _cargar_env()
     return destino
+
+
+def _combinar_ini(origen: Path, destino: Path) -> None:
+    """Agrega al server_settings.cfg existente las secciones y claves del elegido.
+
+    Así, elegir un archivo con solo algunas secciones (por ejemplo [GOOGLE]) no
+    borra [ODOO] ni el resto. Lo que viene en el archivo elegido manda. Se deja
+    un respaldo del anterior.
+    """
+    import configparser
+    actual = configparser.ConfigParser(interpolation=None)
+    actual.optionxform = str  # respeta mayúsculas (claves tipo MLC435301)
+    leer_ini(actual, str(destino))
+    nuevo = configparser.ConfigParser(interpolation=None)
+    nuevo.optionxform = str
+    leer_ini(nuevo, str(origen))
+    shutil.copyfile(destino, destino.with_name(destino.name + ".anterior"))
+    for seccion in nuevo.sections():
+        if not actual.has_section(seccion):
+            actual.add_section(seccion)
+        for clave, valor in nuevo.items(seccion, raw=True):
+            actual.set(seccion, clave, valor)
+    with open(destino, "w", encoding="utf-8") as salida:
+        actual.write(salida)
 
 
 def _reconocer(origen: Path) -> str:
