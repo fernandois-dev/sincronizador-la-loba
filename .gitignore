@@ -97,6 +97,7 @@ data/ml_tokens.tmp
 data/ml_ventas_estado.json
 data/ml_ventas_estado.tmp
 data/sincronizador_ml.db
+data/tmp_fotos/
 
 # Datos locales: nunca al repo público
 *.db

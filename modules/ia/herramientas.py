@@ -12,6 +12,7 @@ from django.db.models import Q
 from modules.servidor.models import MovimientoProductoMes, OdooProducto
 
 MAX_RESULTADOS = 15        # tope de filas que se le devuelven al modelo
+MIN_RESULTADOS_BUSQUEDA = 6  # piso: con menos, el modelo no ve las variantes (19-nov, espuma picada)
 MAX_CARACTERES = 8000      # tope del texto de cada resultado (cuida tokens y costo)
 
 
@@ -58,7 +59,10 @@ def buscar_producto(texto: str, limite: int = 10, solo_favoritos: bool = False) 
     texto = str(texto).strip()
     if not texto:
         return {"error": "Indica qué producto buscar."}
-    limite = max(1, min(int(limite), MAX_RESULTADOS))
+    # Piso de resultados: productos casi iguales (BOLSA 1 KG / 5 KG / 10 KG) empatan en puntaje y su
+    # orden es casi azar. Si el modelo pide 1-2 resultados, puede ver solo la de 5 kg y concluir
+    # "no tenemos de 1 kg" (pasó el 19-nov). Mostrar algunos más cuesta poco y evita ese error.
+    limite = max(MIN_RESULTADOS_BUSQUEDA, min(int(limite), MAX_RESULTADOS))
 
     r = rag.catalogo().buscar(texto, limite, solo_favoritos=bool(solo_favoritos))
     resultado = {

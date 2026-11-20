@@ -147,6 +147,21 @@
         "desde (el )?1 (de )?enero",
         "ECOSA[^\\n]*(\\b(9|17)\\s*(u\\b|unid)|\\|\\s*(9|17)\\s*\\|)"
       ]
+    },
+    {
+      "id": "espuma-picada-kg",
+      "_origen": "19-nov: respondió 'No tenemos de 1 kg' y ofreció solo la de 5 kg; existen ESP0063 y ESP0064 (1 kg)",
+      "pregunta": "sabes si tenemos bolsas de espuma picada de a kg ?",
+      "herramientas": [
+        "buscar_producto"
+      ],
+      "contiene": [
+        "ESP0063",
+        "ESP0064"
+      ],
+      "no_contiene": [
+        "no tenemos"
+      ]
     }
   ]
 }
