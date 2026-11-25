@@ -157,6 +157,11 @@ def atributos_desde_planilla(valores: dict, atributos_cat: list[dict]) -> tuple[
     return atributos, avisos
 
 
+def atributos_categoria(categoria_id: str, ml: MercadoLibreClient | None = None) -> list[dict]:
+    """Datos que pide la categoría en Mercado Libre (/categories/{id}/attributes)."""
+    return (ml or MercadoLibreClient()).get(f"/categories/{categoria_id}/attributes", auth=False) or []
+
+
 def _requerido(a: dict) -> bool:
     tags = a.get("tags") or {}
     return bool(tags.get("required") or tags.get("catalog_required")) and not tags.get("read_only")

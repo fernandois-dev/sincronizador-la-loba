@@ -20,6 +20,7 @@ from logger_config import get_logger
 from modules.ia import descripcion as descripcion_ia
 from modules.mercadolibre import catalogo, publicador
 from modules.servidor.google_sheet import GoogleService
+from modules.servidor.components.datos_ml import FormularioDatosML
 from modules.servidor.models import ProductoML
 from pages.generic_page import GenericPage
 from utilities.conditions import Conditions
@@ -418,6 +419,12 @@ class MercadoLibrePage(GenericPage):
         except Exception as e:
             logger.warning("No se pudieron cargar las fotos de %s: %s", p.ref_interna, e)
             fotos = []
+        try:
+            atributos_cat = await asyncio.to_thread(publicador.atributos_categoria, p.categoria_id) \
+                if p.categoria_id else []
+        except Exception as e:
+            logger.warning("No se pudieron leer los datos de la categoría %s: %s", p.categoria_id, e)
+            atributos_cat = []
         self.loading.hide()
         cfg = catalogo.config_ml()
         tenue = ft.Colors.ON_SURFACE_VARIANT
@@ -555,11 +562,15 @@ class MercadoLibrePage(GenericPage):
             dato(ft.Icons.WAREHOUSE_OUTLINED, "Stock en Odoo", "—" if p.stock is None else p.stock),
             dato(ft.Icons.STORE_OUTLINED, "Despacho", "Punto de despacho Mercado Libre"),
             dato(ft.Icons.TABLE_CHART_OUTLINED, "Planilla", f"{p.hoja} · fila {p.fila}"),
-            *[dato(ft.Icons.TUNE, nombre.capitalize(), valor) for nombre, valor in p.datos_ml.items()],
         ])
 
-        pendientes = [x.strip() for x in p.pendientes.split(",") if x.strip()]
-        estado = tarjeta("Para publicar", ft.Icons.CHECKLIST, [
+        def controles_estado():
+            # "faltan datos ML: A, B" va en una sola línea (es siempre lo último)
+            base, _, faltan = (p.pendientes or "").partition(catalogo.PREFIJO_FALTAN_DATOS)
+            pendientes = [x.strip(" ,") for x in base.split(", ") if x.strip(" ,")]
+            if faltan.strip():
+                pendientes.append(catalogo.PREFIJO_FALTAN_DATOS + faltan.strip())
+            return [
             ft.Container(ft.Text(p.estado, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK_87),
                          bgcolor=_COLOR_ESTADO.get(p.estado, ft.Colors.GREY_200), border_radius=RADIO_CHIP,
                          padding=ft.Padding.symmetric(vertical=4, horizontal=12)),
@@ -570,7 +581,17 @@ class MercadoLibrePage(GenericPage):
             *([ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, size=16, color=ft.Colors.AMBER_800),
                        ft.Text("Hay propuestas por aprobar en la planilla", size=12, expand=True)], spacing=6)]
               if p.tiene_propuestas else []),
-        ])
+            ]
+
+        estado = tarjeta("Para publicar", ft.Icons.CHECKLIST, controles_estado())
+
+        def tras_guardar_datos(faltan):
+            # la tarjeta es Column([encabezado, divisor, *controles]): se rehacen los controles
+            estado.content.controls = estado.content.controls[:2] + controles_estado()
+            self.update_filtered_view()
+            abrir_unico(self.page, dlg)
+
+        datos_ml = FormularioDatosML(self.page, p, atributos_cat, tarjeta, al_guardar=tras_guardar_datos).control
 
         # ── descripción ──
         # El editor está siempre disponible (generar otra con IA, editar, guardar borrador, aprobar).
@@ -711,6 +732,7 @@ class MercadoLibrePage(GenericPage):
             content=ft.Container(ft.Column([
                 ft.Row([galeria, comprador], spacing=24, vertical_alignment=ft.CrossAxisAlignment.START),
                 ft.Row([ficha, estado], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
+                datos_ml,
                 descripcion,
                 zona_simulacion,
             ], scroll=ft.ScrollMode.AUTO, spacing=16), width=1000, height=640),

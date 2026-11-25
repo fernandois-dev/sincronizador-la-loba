@@ -10,7 +10,10 @@ Este módulo:
   3. Calcula el precio ML para recibir lo mismo que VENTA FLB, con la comisión
      real de la categoría consultada a Mercado Libre.
   4. Cuenta las fotos en la carpeta de Drive (REF-1.jpg, REF-2.jpg...) y el stock en Odoo.
-  5. Marca lo que falta para poder publicar.
+  5. Junta los datos de la categoría (Material, Forma…): columnas "<DATO> ML" de la
+     pestaña, luego la pestaña FICHAS ML (mercadolibre/fichas.py), luego los valores
+     por defecto de [MERCADOLIBRE_COLUMNAS]; y avisa los obligatorios que faltan.
+  6. Marca lo que falta para poder publicar.
 
 Lo que dice la planilla siempre manda: una propuesta solo se usa si la celda está vacía,
 y al aprobarla se escribe en la planilla.
@@ -38,6 +41,7 @@ from collections import Counter
 
 from logger_config import get_logger
 from utilities import carpeta_datos
+from modules.mercadolibre import fichas
 from modules.mercadolibre.client import MercadoLibreClient, MercadoLibreError, SITE_ID
 
 logger = get_logger(__name__)
@@ -287,6 +291,8 @@ class _CacheML:
         self._categorias: dict[str, str] = {}
         self._comisiones: dict[tuple, dict] = {}
         self._envios: dict[tuple, int] = {}
+        self._atributos: dict[str, list] = {}
+        self._defectos: dict[str, list] = {}
         self._uid = None
 
     def nombre_categoria(self, cat_id: str) -> str:
@@ -298,6 +304,21 @@ class _CacheML:
             except MercadoLibreError:
                 self._categorias[cat_id] = ""
         return self._categorias[cat_id]
+
+    def atributos(self, cat_id: str) -> list[dict]:
+        """Datos que pide la categoría (lista de /categories/{id}/attributes); [] si falla."""
+        if cat_id not in self._atributos:
+            try:
+                self._atributos[cat_id] = self.ml.get(f"/categories/{cat_id}/attributes", auth=False) or []
+            except MercadoLibreError:
+                self._atributos[cat_id] = []
+        return self._atributos[cat_id]
+
+    def por_defecto(self, cat_id: str) -> list[tuple[str, str]]:
+        """Valores por defecto de la categoría en [MERCADOLIBRE_COLUMNAS] (solo los que tienen valor)."""
+        if cat_id not in self._defectos:
+            self._defectos[cat_id] = [(d, v) for d, v in columnas_estandar(cat_id) if v]
+        return self._defectos[cat_id]
 
     def predecir(self, texto: str) -> str:
         try:
@@ -441,6 +462,13 @@ def construir_catalogo() -> tuple[list[dict], list[str]]:
         stock = {}
         avisos.append("No se pudo consultar el stock en Odoo.")
 
+    try:
+        todas_las_fichas = fichas.leer_todas()
+    except Exception as e:
+        logger.error("No se pudo leer la pestaña %s: %s", fichas.HOJA, e, exc_info=True)
+        todas_las_fichas = {}
+        avisos.append(f"No se pudo leer la pestaña {fichas.HOJA} de la Tabla Base.")
+
     vistos = Counter(f["ref"] for f in filas if f["ref"])
     productos = []
     for f in filas:
@@ -499,6 +527,14 @@ def construir_catalogo() -> tuple[list[dict], list[str]]:
         if sin_col:
             pend.append("la hoja no tiene columna " + ", ".join(sin_col))
 
+        # datos de la categoría: columnas "<DATO> ML" > FICHAS ML > valores por defecto
+        atributos, origen = fichas.combinar(f["atributos"], todas_las_fichas.get(f["ref"], {}),
+                                            cache.por_defecto(cat) if cat else [])
+        if cat:
+            faltan_datos = datos_obligatorios_faltantes(cache.atributos(cat), atributos, f, marca, cfg)
+            if faltan_datos:
+                pend.append(PREFIJO_FALTAN_DATOS + ", ".join(faltan_datos))
+
         cantidad = (odoo[1] if odoo else 0) - cfg["stock_reserva"]
         if pend:
             estado = ESTADO_FALTAN
@@ -538,12 +574,66 @@ def construir_catalogo() -> tuple[list[dict], list[str]]:
             "col_marca": f["col_marca"],
             "col_titulo": f["col_titulo"],
             "col_descripcion": f["col_descripcion"],
-            "atributos_ml": json.dumps(f["atributos"], ensure_ascii=False),
+            "atributos_ml": json.dumps(atributos, ensure_ascii=False),
+            "atributos_origen": json.dumps(origen, ensure_ascii=False),
             "odoo_id": odoo[0] if odoo else None,
         })
     if vincular_publicaciones(ml, productos):
         avisos.append("No se pudo revisar en Mercado Libre qué productos ya están publicados.")
     return productos, avisos
+
+
+def datos_obligatorios_faltantes(atributos_cat: list[dict], valores: dict, fila: dict, marca: str,
+                                 cfg: dict) -> list[str]:
+    """Nombres de los datos obligatorios de la categoría que no se sabe completar
+    (los mismos que mostraría la simulación), para avisar antes de simular."""
+    if not atributos_cat:
+        return []
+    from types import SimpleNamespace
+    from modules.mercadolibre.publicador import armar_item
+
+    p = SimpleNamespace(
+        marca=marca, ref_interna=fila["ref"], barcode=fila["barcode"], titulo="", categoria_id="",
+        precio_ml=0, stock=0, peso_gr=int(fila["peso"]) if fila["peso"] else None,
+        medidas_paquete=fila["medidas"], atributos_ml=json.dumps(valores, ensure_ascii=False))
+    _, faltantes, _ = armar_item(p, [], atributos_cat, cfg)
+    return faltantes
+
+
+PREFIJO_FALTAN_DATOS = "faltan datos ML: "
+
+
+def aplicar_ficha(p, ficha: dict[str, str], atributos_cat: list[dict]) -> list[str]:
+    """Después de guardar la ficha de p (ProductoML) en FICHAS ML, recalcula sus datos,
+    los obligatorios que faltan y el estado, sin volver a cargar toda la Tabla Base.
+    No guarda en la base: eso lo hace quien llama. Devuelve los datos que siguen faltando."""
+    cfg = config_ml()
+    origen = p.origen_datos_ml
+    planilla = {d: v for d, v in p.datos_ml.items() if origen.get(d) == "planilla"}
+    defectos = [(d, v) for d, v in columnas_estandar(p.categoria_id) if v] if p.categoria_id else []
+    valores, origen = fichas.combinar(planilla, ficha, defectos)
+    p.atributos_ml = json.dumps(valores, ensure_ascii=False)
+    p.atributos_origen = json.dumps(origen, ensure_ascii=False)
+
+    fila = {"ref": p.ref_interna, "barcode": p.barcode, "peso": p.peso_gr, "medidas": p.medidas_paquete}
+    faltan = datos_obligatorios_faltantes(atributos_cat, valores, fila, p.marca, cfg) if p.categoria_id else []
+    # "faltan datos ML: …" es siempre lo último de los pendientes (ver construir_catalogo)
+    previos = (p.pendientes or "").split(PREFIJO_FALTAN_DATOS)[0]
+    pend = [x.strip() for x in previos.split(", ") if x.strip()]
+    if faltan:
+        pend.append(PREFIJO_FALTAN_DATOS + ", ".join(faltan))
+    p.pendientes = ", ".join(pend)[:255]
+    if p.estado in (ESTADO_FALTAN, ESTADO_LISTO, ESTADO_REVISAR, ESTADO_SIN_STOCK):
+        cantidad = (p.stock or 0) - cfg["stock_reserva"]
+        if pend:
+            p.estado = ESTADO_FALTAN
+        elif cantidad <= 0:
+            p.estado = ESTADO_SIN_STOCK
+        elif p.categoria_propuesta or p.marca_propuesta or p.titulo_propuesta:
+            p.estado = ESTADO_REVISAR
+        else:
+            p.estado = ESTADO_LISTO
+    return faltan
 
 
 def vincular_publicaciones(ml: MercadoLibreClient, productos: list[dict]) -> int:
