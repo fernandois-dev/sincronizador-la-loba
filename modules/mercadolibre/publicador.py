@@ -247,9 +247,8 @@ def _causas(err: MercadoLibreError) -> tuple[list[str], list[str]]:
     """(errores, advertencias) de una respuesta de error de Mercado Libre."""
     d = err.detalle if isinstance(err.detalle, dict) else {}
     errores, advertencias = [], []
-    for c in d.get("cause", []) or []:
-        if not isinstance(c, dict):
-            continue
+    causas = [c for c in d.get("cause", []) or [] if isinstance(c, dict)]
+    for c in causas:
         codigo = c.get("code", "")
         if codigo in ADVERTENCIAS_BLOQUEANTES or codigo.startswith("shipping.lost_me2"):
             errores.append(ADVERTENCIAS_BLOQUEANTES.get(codigo, c.get("message") or codigo))
@@ -260,7 +259,7 @@ def _causas(err: MercadoLibreError) -> tuple[list[str], list[str]]:
                 advertencias.append(texto)
         else:
             errores.append(texto or c.get("message", ""))
-    if not errores and not advertencias:
+    if not causas:  # ML no dijo por qué: el mensaje general es el error
         errores.append(d.get("message") or str(err))
     return errores, advertencias
 
@@ -354,9 +353,7 @@ def buscar_por_sku(ml: MercadoLibreClient, ref: str) -> list[dict]:
     ids = ml.get(f"/users/{uid}/items/search", params={"seller_sku": ref}).get("results", [])
     if not ids:
         return []
-    r = ml.get("/items", params={"ids": ",".join(ids[:20]),
-                                 "attributes": "id,status,sub_status,permalink,price,available_quantity,title"})
-    return [x["body"] for x in r if x.get("code") == 200]
+    return ml.items(ids[:20], "id,status,sub_status,permalink,price,available_quantity,title")
 
 
 def publicacion_vigente(ml: MercadoLibreClient, ref: str) -> dict | None:

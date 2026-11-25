@@ -12,9 +12,8 @@ en Odoo. Cada cambio queda como evento ("ESPUMA 5 CM D 24 (ESP0044): 11 → 10")
 from __future__ import annotations
 
 from logger_config import get_logger
-import time
 
-from modules.mercadolibre.client import MercadoLibreClient, MercadoLibreError
+from modules.mercadolibre.client import MercadoLibreClient
 from modules.mercadolibre.rutas import leer_config
 
 logger = get_logger(__name__)
@@ -41,21 +40,10 @@ def publicaciones(ml: MercadoLibreClient) -> list[dict]:
         offset += len(lote)
         if not lote or offset >= (r.get("paging") or {}).get("total", 0):
             break
-    items = []
-    for i in range(0, len(ids), 20):
-        params = {"ids": ",".join(ids[i:i + 20]),
-                  "attributes": "id,title,status,sub_status,available_quantity,attributes,seller_custom_field,variations"}
-        try:
-            lote = ml.get("/items", params=params)
-        except MercadoLibreError:
-            time.sleep(3)  # ML a veces rechaza una consulta por un momento: se reintenta una vez
-            lote = ml.get("/items", params=params)
-        for x in lote:
-            if x.get("code") == 200:
-                b = x["body"]
-                b["sku"] = (b.get("seller_custom_field") or next(
-                    (a.get("value_name") for a in b.get("attributes") or [] if a.get("id") == "SELLER_SKU"), "") or "").strip()
-                items.append(b)
+    items = ml.items(ids, "id,title,status,sub_status,available_quantity,attributes,seller_custom_field,variations")
+    for b in items:
+        b["sku"] = (b.get("seller_custom_field") or next(
+            (a.get("value_name") for a in b.get("attributes") or [] if a.get("id") == "SELLER_SKU"), "") or "").strip()
     return items
 
 

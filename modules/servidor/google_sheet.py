@@ -34,6 +34,24 @@ def _drive():
     return _conexion["drive"]
 
 
+def _reintentar_si_se_corta(llamada):
+    """Ejecuta una llamada a Google y la repite UNA vez si la conexión se cortó.
+
+    La sesión HTTP se reutiliza mientras la app está abierta; si queda inactiva,
+    Google la cierra y la siguiente llamada falla con ConnectionResetError (10054).
+    Usar solo con operaciones que se pueden repetir sin efecto doble (escribir
+    valores fijos en celdas), nunca con append.
+    """
+    import time
+    import requests
+    try:
+        return llamada()
+    except requests.exceptions.ConnectionError:
+        logger.warning("Google cortó la conexión; se reintenta una vez.", exc_info=True)
+        time.sleep(1)
+        return llamada()
+
+
 def __getattr__(nombre):
     """Compatibilidad: google_sheet.creds / client / drive_service siguen existiendo."""
     accesos = {"creds": _credenciales, "client": _cliente, "drive_service": _drive}
@@ -261,9 +279,10 @@ class GoogleService():
             {"range": f"'{hoja}'!{rowcol_to_a1(fila, columna)}", "values": [[valor]]}
             for hoja, fila, columna, valor in cambios
         ]
-        _get_workbook("workbook_table_base").values_batch_update(
+        # Repetible: escribe valores fijos en celdas fijas.
+        _reintentar_si_se_corta(lambda: _get_workbook("workbook_table_base").values_batch_update(
             {"valueInputOption": "RAW", "data": data}
-        )
+        ))
 
     @staticmethod
     def get_proveedor(worksheet_name):
