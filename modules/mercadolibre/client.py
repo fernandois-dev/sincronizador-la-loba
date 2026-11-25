@@ -357,6 +357,26 @@ class MercadoLibreClient:
     def usuario_actual(self) -> dict:
         return self.get("/users/me")
 
+    def items(self, ids: list[str], attributes: str = "") -> list[dict]:
+        """Datos de varias publicaciones, de a una con /items/{id}.
+
+        ML retiró la consulta múltiple /items?ids=... (403 ResourceDeprecated).
+        Las que ya no existen (404) se omiten.
+        """
+        params = {"attributes": attributes} if attributes else {}
+        res = []
+        for item_id in ids:
+            try:
+                res.append(self.get(f"/items/{item_id}", params=params))
+            except MercadoLibreError as e:
+                if e.status == 404:
+                    continue
+                if e.status != 429 and (e.status or 0) < 500:
+                    raise
+                time.sleep(3)  # ML a veces rechaza una consulta por un momento: se reintenta una vez
+                res.append(self.get(f"/items/{item_id}", params=params))
+        return res
+
     def predecir_categoria(self, texto: str, limite: int = 3) -> list[dict]:
         """Sugiere categorías de ML a partir del nombre del producto."""
         return self.get(
