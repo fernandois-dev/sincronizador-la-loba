@@ -25,7 +25,7 @@ class ServerConfigPage(PaginaFija, ft.Container):
         # Campos de configuración
         self.txt_numero_puerto = ft.TextField(
             label="Número de puerto",
-            value=self.config.get("SERVER", "FASTAPI_PORT"),
+            value=self.config.get("SERVER", "FASTAPI_PORT", fallback="3500"),
             width=300,
         )
 
@@ -81,10 +81,44 @@ class ServerConfigPage(PaginaFija, ft.Container):
             on_click=self.close_window,
         )
 
+        # Archivos de configuración (credentials.json, server_settings.cfg, .env)
+        self.txt_archivos = ft.Text("", size=12)
+        self._actualizar_estado_archivos()
+        seccion_archivos = ft.Column(
+            controls=[
+                ft.Text("Archivos de configuración", size=16, weight=ft.FontWeight.W_600),
+                ft.Text(
+                    f"Carpeta de datos: {carpeta_datos.carpeta()}",
+                    size=11, color=ft.Colors.GREY_500, selectable=True,
+                ),
+                self.txt_archivos,
+                ft.Row(
+                    controls=[
+                        ft.Button(
+                            content="Importar archivos…",
+                            icon=ft.Icons.UPLOAD_FILE,
+                            tooltip="credentials.json, server_settings.cfg o .env. Un .cfg se "
+                                    "combina con el actual: lo del archivo elegido manda.",
+                            on_click=self.importar_archivos,
+                        ),
+                        ft.Button(
+                            content="Abrir carpeta",
+                            icon=ft.Icons.FOLDER_OPEN,
+                            on_click=lambda e: carpeta_datos.abrir_carpeta(),
+                        ),
+                    ],
+                    wrap=True,
+                ),
+            ],
+            spacing=8,
+        )
+
         # Layout de la ventana
         self.content = ft.Column(
             controls=[
                 ft.Text("Configuración del Servidor", size=20, weight=ft.FontWeight.BOLD),
+                seccion_archivos,
+                ft.Divider(),
                 self.txt_numero_puerto,
                 ft.Divider(),
                 ft.Text("Conexión con Odoo", size=16, weight=ft.FontWeight.W_600),
@@ -125,6 +159,50 @@ class ServerConfigPage(PaginaFija, ft.Container):
             width=440,
         )
 
+    def _actualizar_estado_archivos(self):
+        partes = []
+        for nombre, obligatorio, _ in carpeta_datos.ARCHIVOS:
+            if not carpeta_datos.ruta(nombre).exists():
+                estado = "falta" if obligatorio else "no está (opcional)"
+            elif nombre == "server_settings.cfg" and carpeta_datos.odoo_incompleto():
+                estado = "sin [ODOO] completo"
+            else:
+                estado = "ok"
+            partes.append(f"{nombre}: {estado}")
+        self.txt_archivos.value = "  ·  ".join(partes)
+
+    def importar_archivos(self, e=None):
+        """Elige uno o más archivos y los copia a la carpeta de datos; luego recarga la página."""
+        async def _elegir():
+            archivos = await ft.FilePicker().pick_files(
+                dialog_title="Elige credentials.json, server_settings.cfg y/o .env",
+                allow_multiple=True,
+            )
+            rutas = [a.path for a in (archivos or []) if a.path]
+            if not rutas:
+                return
+            guardados, errores = [], []
+            for ruta in rutas:
+                try:
+                    guardados.append(carpeta_datos.importar(ruta))
+                except Exception as exc:
+                    errores.append(str(exc))
+            if guardados:
+                # Que Odoo y Google tomen los archivos nuevos en la próxima llamada.
+                from modules.servidor import google_sheet, odoo
+                odoo._connection.invalidate()
+                google_sheet._conexion.clear()
+            mensaje = ("Guardado: " + ", ".join(guardados) + ". ") if guardados else ""
+            mensaje += " ".join(errores)
+            abrir_dialogo(self.page, ft.SnackBar(
+                ft.Text(mensaje.strip()),
+                bgcolor=ft.Colors.ERROR if errores else None,
+            ))
+            # Recarga la página para mostrar los valores nuevos (Odoo, impresora...).
+            self.page.custom_go("/sistema/configuracion")
+
+        self.page.run_task(_elegir)
+
     def atajos(self):
         return {"f8": lambda: self.page.custom_go("/")}
 
@@ -142,7 +220,9 @@ class ServerConfigPage(PaginaFija, ft.Container):
 
     def save_config(self, e):
         """Guarda la configuración en el archivo."""
-        self.config["SERVER"]["FASTAPI_PORT"] = self.txt_numero_puerto.value
+        if not self.config.has_section("SERVER"):
+            self.config.add_section("SERVER")
+        self.config["SERVER"]["FASTAPI_PORT"] = self.txt_numero_puerto.value or "3500"
 
         if not self.config.has_section("REPORTES"):
             self.config.add_section("REPORTES")

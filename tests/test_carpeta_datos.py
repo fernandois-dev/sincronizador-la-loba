@@ -143,3 +143,50 @@ def test_cfg_parcial_se_combina_y_no_borra_odoo(carpeta_vacia, tmp_path_factory)
     assert cfg["ODOO"]["password"] == "clave"
     assert "MLC435301" in (carpeta_vacia / "server_settings.cfg").read_text(encoding="utf-8")
     assert carpeta_datos.odoo_incompleto() == []
+
+
+def test_configuracion_permite_reimportar_archivos(carpeta_vacia, tmp_path_factory, monkeypatch, errores_log):
+    """Sistema → Configuración: si el server_settings.cfg quedó mal, se puede elegir
+    otro (se combina) sin borrar archivos a mano."""
+    import flet as ft
+    from tests.apoyo import abrir_app, problemas_en_controles
+    from modules.servidor import google_sheet, odoo
+
+    (carpeta_vacia / "credentials.json").write_text('{"type": "service_account"}', encoding="utf-8")
+    (carpeta_vacia / "server_settings.cfg").write_text(
+        "[ODOO]\nurl = https://malo\ndb = base\nusername = yo\npassword = vieja\n", encoding="utf-8")
+    origen = tmp_path_factory.mktemp("descargas")
+    correcto = origen / "server_settings.cfg"
+    correcto.write_text("[ODOO]\npassword = nueva\nurl = https://bueno\n[GOOGLE]\ntabla_base = abc\n",
+                        encoding="utf-8")
+
+    class Elegido:
+        path = str(correcto)
+
+    async def elegir(self, **kw):
+        return [Elegido()]
+
+    monkeypatch.setattr(ft.FilePicker, "pick_files", elegir)
+    google_sheet._conexion["creds"] = "vieja"
+
+    async def prueba():
+        from modules.servidor.pages.server_config_page import ServerConfigPage
+
+        app = await abrir_app()
+        app.ir("/sistema/configuracion")
+        await app.esperar()
+        assert problemas_en_controles(app.page) == []
+        pagina = next(_objetos(ServerConfigPage))
+        assert "server_settings.cfg: ok" in pagina.txt_archivos.value
+        pagina.importar_archivos()
+        await app.esperar()
+        await asyncio.sleep(0.3)
+        await app.esperar()
+        assert app.errores_envio == []
+        await app.terminar()
+
+    asyncio.run(prueba())
+    texto = (carpeta_vacia / "server_settings.cfg").read_text(encoding="utf-8")
+    assert "https://bueno" in texto and "nueva" in texto and "tabla_base = abc" in texto
+    assert "username = yo" in texto                      # lo que no venía se mantiene
+    assert google_sheet._conexion == {} and odoo._connection._uid is None  # se reconectan con lo nuevo
