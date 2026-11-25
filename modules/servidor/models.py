@@ -385,6 +385,9 @@ class ProductoML(models.Model):
     ml_link = CustomCharField(max_length=255, verbose_name="Link ML", default="", blank=True, hidden=True)
     # datos de la categoría leídos de las columnas "<DATO> ML" de la planilla, como JSON {"FORMA": "Rectangular", …}
     atributos_ml = CustomCharField(max_length=4000, verbose_name="Datos ML", default="{}", blank=True, hidden=True)
+    # de dónde salió cada dato: {"FORMA": "planilla" | "ficha" | "por defecto"} (ver mercadolibre/fichas.py)
+    atributos_origen = CustomCharField(max_length=2000, verbose_name="Origen datos ML", default="{}", blank=True,
+                                       hidden=True)
 
     def __str__(self):
         return f"{self.producto} ({self.hoja})"
@@ -398,6 +401,14 @@ class ProductoML(models.Model):
         import json
         try:
             return json.loads(self.atributos_ml or "{}")
+        except ValueError:
+            return {}
+
+    @property
+    def origen_datos_ml(self) -> dict:
+        import json
+        try:
+            return json.loads(self.atributos_origen or "{}")
         except ValueError:
             return {}
 
