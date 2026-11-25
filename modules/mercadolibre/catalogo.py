@@ -15,7 +15,7 @@ Este módulo:
 Lo que dice la planilla siempre manda: una propuesta solo se usa si la celda está vacía,
 y al aprobarla se escribe en la planilla.
 
-Configuración opcional en apps/servidor/server_settings.cfg:
+Configuración opcional en server_settings.cfg (utilities/carpeta_datos.py):
 
     [MERCADOLIBRE]
     carpeta_fotos_id = <id de la carpeta compartida de Drive>
@@ -33,11 +33,11 @@ from __future__ import annotations
 import configparser
 import json
 import math
-import os
 import re
 from collections import Counter
 
 from logger_config import get_logger
+from utilities import carpeta_datos
 from modules.mercadolibre.client import MercadoLibreClient, MercadoLibreError, SITE_ID
 
 logger = get_logger(__name__)
@@ -85,10 +85,9 @@ PALABRAS_MINUSCULA = {"de", "del", "la", "el", "para", "con", "sin", "y", "en", 
 
 # ── configuración ──────────────────────────────────────────────────────────────
 def config_ml() -> dict:
-    ruta = os.path.abspath(os.path.join(os.getcwd(), "apps/servidor/server_settings.cfg"))
     parser = configparser.ConfigParser()
     parser.optionxform = str  # respetar mayúsculas de los nombres de pestaña
-    parser.read(ruta, encoding="utf-8")
+    carpeta_datos.leer_ini(parser, str(carpeta_datos.ruta("server_settings.cfg")))
     sec = parser["MERCADOLIBRE"] if parser.has_section("MERCADOLIBRE") else {}
     extras = [m.strip().upper() for m in str(sec.get("marcas", "")).split(",") if m.strip()]
     categorias = {}
@@ -611,10 +610,9 @@ def conservar_descripciones(productos: list[dict], previas: dict) -> int:
 # ── set estándar de columnas por categoría ────────────────────────────────────
 def columnas_estandar(categoria_id: str) -> list[tuple[str, str]]:
     """[(dato, valor_por_defecto)] de [MERCADOLIBRE_COLUMNAS] para la categoría ('' = sin valor por defecto)."""
-    ruta = os.path.abspath(os.path.join(os.getcwd(), "apps/servidor/server_settings.cfg"))
     parser = configparser.ConfigParser()
     parser.optionxform = str
-    parser.read(ruta, encoding="utf-8")
+    carpeta_datos.leer_ini(parser, str(carpeta_datos.ruta("server_settings.cfg")))
     if not parser.has_section("MERCADOLIBRE_COLUMNAS"):
         return []
     linea = next((v for k, v in parser["MERCADOLIBRE_COLUMNAS"].items() if k.strip().upper() == categoria_id.upper()), "")
