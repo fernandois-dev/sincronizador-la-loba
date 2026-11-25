@@ -104,6 +104,11 @@ data/tmp_fotos/
 *.db-journal
 *.sqlite3
 server_settings.cfg
+# Copias que deja la app al reemplazar la configuración, y respaldos manuales (contienen claves)
+*.anterior
+.env.*
+!.env.example
+*.antes*
 .claude/settings.local.json
 .claude/settings.json
 .idea/
