@@ -1,7 +1,7 @@
+import threading
 import gspread
 from gspread.utils import ValueRenderOption, rowcol_to_a1
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
 
 from logger_config import get_logger
 
@@ -12,26 +12,31 @@ scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 # Las credenciales se cargan la primera vez que se usan (no al importar), así la
 # app puede abrir y mostrar la pantalla de configuración si falta credentials.json.
 _conexion: dict = {}
+_candado_conexion = threading.RLock()
 
 
 def _credenciales():
-    if "creds" not in _conexion:
-        from modules.mercadolibre.rutas import raiz
-        _conexion["creds"] = Credentials.from_service_account_file(
-            str(raiz() / "credentials.json"), scopes=scopes)
-    return _conexion["creds"]
+    with _candado_conexion:
+        if "creds" not in _conexion:
+            from modules.mercadolibre.rutas import raiz
+            _conexion["creds"] = Credentials.from_service_account_file(
+                str(raiz() / "credentials.json"), scopes=scopes)
+        return _conexion["creds"]
 
 
 def _cliente():
-    if "client" not in _conexion:
-        _conexion["client"] = gspread.authorize(_credenciales())
-    return _conexion["client"]
+    with _candado_conexion:
+        if "client" not in _conexion:
+            _conexion["client"] = gspread.authorize(_credenciales())
+        return _conexion["client"]
 
 
 def _drive():
-    if "drive" not in _conexion:
-        _conexion["drive"] = build('drive', 'v3', credentials=_credenciales())
-    return _conexion["drive"]
+    with _candado_conexion:
+        if "drive" not in _conexion:
+            from googleapiclient.discovery import build  # pesada (~0,2–3 s): solo al usar Drive
+            _conexion["drive"] = build('drive', 'v3', credentials=_credenciales())
+        return _conexion["drive"]
 
 
 def _reintentar_si_se_corta(llamada):
@@ -109,12 +114,22 @@ _wb_cache: dict = {}
 # Nombre interno → clave en [GOOGLE]
 _SHEETS = _CLAVES_GOOGLE
 
+# Un candado por planilla: si la app pide una que el precalentamiento en segundo
+# plano está abriendo, espera a esa y no la abre dos veces.
+_candados = {nombre: threading.Lock() for nombre in _SHEETS}
+
 
 def _get_workbook(name: str):
     """Devuelve el workbook cacheado; lo abre si aún no se conectó o si falló antes."""
     if _wb_cache.get(name) is not None:
         return _wb_cache[name]
+    with _candados.setdefault(name, threading.Lock()):
+        if _wb_cache.get(name) is not None:     # lo abrió otro hilo mientras esperaba
+            return _wb_cache[name]
+        return _abrir_workbook(name)
 
+
+def _abrir_workbook(name: str):
     sid = _id_google(_SHEETS[name])
     try:
         logger.debug("Abriendo Google Sheet '%s' (id=%s)", name, sid)
@@ -143,11 +158,19 @@ def _hay_credenciales() -> bool:
     return (raiz() / "credentials.json").exists()
 
 
-for _name in (_SHEETS if _hay_credenciales() and _config_google() else ()):
-    try:
-        _get_workbook(_name)
-    except Exception:
-        pass  # El error ya quedó logueado; la app puede iniciar igual.
+def _precalentar():
+    for nombre in _SHEETS:
+        try:
+            _get_workbook(nombre)
+        except Exception:
+            pass  # El error ya quedó logueado; la app puede iniciar igual.
+
+
+# Antes se abrían las 6 planillas aquí mismo, una tras otra (~7 s antes de mostrar la
+# ventana). Ahora en un hilo aparte: la ventana abre de inmediato y, si una pantalla
+# necesita una planilla que aún se está abriendo, espera solo a esa (_candados).
+if _hay_credenciales() and _config_google():
+    threading.Thread(target=_precalentar, name="precalentar-planillas", daemon=True).start()
 
 
 

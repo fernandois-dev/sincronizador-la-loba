@@ -8,12 +8,12 @@ Todos usan el formato de OpenAI, pero cada uno acepta parámetros extra distinto
 Vectores de modelos (o largos) distintos NO se pueden comparar entre sí: por eso el índice
 guarda su "huella" y se descarta si no coincide con la configuración actual.
 """
-from openai import OpenAI
-
 from modules.ia.config import ConfigIA
 
 
-def cliente_embeddings(cfg: ConfigIA, timeout: int = 30, max_retries: int = 1) -> OpenAI:
+def cliente_embeddings(cfg: ConfigIA, timeout: int = 30, max_retries: int = 1):
+    from openai import OpenAI  # se carga al usar la IA, no al abrir la app
+
     return OpenAI(base_url=cfg.emb_base_url, api_key=cfg.emb_api_key, timeout=timeout, max_retries=max_retries)
 
 

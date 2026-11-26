@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import os
 import sys
 import tomllib
@@ -62,21 +63,6 @@ carpeta_datos.leer_ini(config, config_path)
 FASTAPI_PORT = int(config.get('SERVER', 'FASTAPI_PORT', fallback=8000))
 
 
-def _migrar_base() -> None:
-    """En el programa instalado, crea o actualiza la base local al abrir.
-
-    Desde el código fuente las migraciones se siguen aplicando a mano.
-    """
-    if carpeta_datos.es_codigo_fuente():
-        return
-    try:
-        from django.core.management import call_command
-        call_command("migrate", interactive=False, verbosity=0)
-    except Exception:
-        logger.exception("No se pudo crear o actualizar la base local")
-
-
-_migrar_base()
 
 
 def get_app_version() -> str:
@@ -94,6 +80,33 @@ def get_app_version() -> str:
 
 
 APP_VERSION = get_app_version()
+
+
+def _migrar_base() -> None:
+    """En el programa instalado, crea o actualiza la base local al abrir.
+
+    Revisar las migraciones toma 1–3 s, así que solo se hace cuando cambia la versión
+    del programa (o si falta la base): la versión que dejó la base al día queda anotada
+    en data/.version_base. Desde el código fuente se siguen aplicando a mano.
+    """
+    if carpeta_datos.es_codigo_fuente():
+        return
+    datos = carpeta_datos.carpeta() / "data"
+    marca = datos / ".version_base"
+    try:
+        if (datos / "database.db").exists() and marca.read_text(encoding="utf-8").strip() == APP_VERSION:
+            return
+    except OSError:
+        pass
+    try:
+        from django.core.management import call_command
+        call_command("migrate", interactive=False, verbosity=0)
+        marca.write_text(APP_VERSION, encoding="utf-8")
+    except Exception:
+        logger.exception("No se pudo crear o actualizar la base local")
+
+
+_migrar_base()
         
 def custom_go(page: ft.Page, route: str, params: dict = None) -> None:
     """
@@ -275,8 +288,16 @@ def iniciar_app(page: ft.Page):
         from modules.servidor.components.panel_asistente import instalar_panel_asistente
         instalar_panel_asistente(page)
         # Por si hubo cambios en Odoo con la app cerrada (si no hay, no llama a la API).
-        from modules.ia.indexador import actualizar_en_segundo_plano
-        actualizar_en_segundo_plano("inicio de la app")
+        # Se importa en un hilo: el indexador carga numpy y openai (~1 s) y no debe
+        # retrasar la ventana.
+        def _indice_al_iniciar():
+            try:
+                from modules.ia.indexador import actualizar_en_segundo_plano
+                actualizar_en_segundo_plano("inicio de la app")
+            except Exception:
+                logger.error("No se pudo revisar el índice de IA al iniciar", exc_info=True)
+
+        threading.Thread(target=_indice_al_iniciar, name="indice-ia-inicio", daemon=True).start()
     except Exception:  # noqa: BLE001 - si falla, la app sigue sin el asistente
         logger.error("No se pudo instalar el panel del asistente IA", exc_info=True)
 
