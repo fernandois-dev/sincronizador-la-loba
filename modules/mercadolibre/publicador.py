@@ -13,6 +13,7 @@ import re
 from datetime import datetime
 
 from logger_config import get_logger
+from modules.mercadolibre import catalogo
 from modules.mercadolibre.catalogo import config_ml
 from modules.mercadolibre.client import MercadoLibreClient, MercadoLibreError
 
@@ -269,28 +270,70 @@ def _causas(err: MercadoLibreError) -> tuple[list[str], list[str]]:
     return errores, advertencias
 
 
-def costo_envio(ml: MercadoLibreClient, p, medidas_cm: str | None) -> int | None:
+_ATTR_PAQUETE = ("SELLER_PACKAGE_LENGTH", "SELLER_PACKAGE_WIDTH", "SELLER_PACKAGE_HEIGHT")
+
+
+def _numero(valor) -> float | None:
+    m = re.search(r"\d+(?:[.,]\d+)?", str(valor or ""))
+    return float(m.group().replace(",", ".")) if m else None
+
+
+def paquete_de(atributos: list[dict]) -> tuple[str, int | None]:
+    """('LxAxH' cm, peso g) a partir de los atributos SELLER_PACKAGE_* de un item ('' / None si faltan)."""
+    por_id = {a.get("id"): (a.get("value_name") or "") for a in atributos or []}
+    medidas = [_numero(por_id.get(x)) for x in _ATTR_PAQUETE]
+    texto = "x".join(str(int(round(m))) for m in medidas) if all(medidas) else ""
+    peso_txt = por_id.get("SELLER_PACKAGE_WEIGHT", "")
+    peso = _numero(peso_txt)
+    if peso is not None and "kg" in peso_txt.lower():
+        peso *= 1000
+    return texto, (int(round(peso)) if peso is not None else None)
+
+
+def _mismo_paquete(a: str, b: str) -> bool:
+    """Compara medidas sin importar el orden (ML las reordena)."""
+    return sorted(a.split("x")) == sorted(b.split("x")) if a and b else a == b
+
+
+def _kg(gramos) -> str:
+    return f"{gramos / 1000:.1f}".replace(".", ",") + " kg"
+
+
+def _plata(n) -> str:
+    return "$" + f"{int(n):,}".replace(",", ".")
+
+
+def info_envio(ml: MercadoLibreClient, p, medidas: str, peso: int | None, precio: int) -> dict:
     """
-    Lo que pagaría el vendedor por el envío gratis, según medidas del paquete
-    ("LxAxH" en cm) y peso. None si faltan datos. ML cobra por el mayor entre peso
-    real y peso volumétrico.
+    Paquete que se envía y lo que Mercado Libre le cobrará a La Loba por cada envío:
+    {"medidas", "peso_g", "peso_cobrado_g", "volumetrico", "costo", "tarifa", "descuento", "lineas"}.
+    "lineas" es el resumen legible para la ventana de simulación.
     """
-    if not (medidas_cm and p.peso_gr):
-        return None
-    uid = ml.usuario_actual()["id"]
-    r = ml.get(f"/users/{uid}/shipping_options/free", params={
-        "dimensions": f"{medidas_cm},{p.peso_gr}", "item_price": p.precio_ml,
-        "listing_type_id": config_ml()["tipo_publicacion"], "mode": "me2", "condition": "new",
-        "logistic_type": "xd_drop_off", "verbose": "true"})
-    return int(r["coverage"]["all_country"]["list_cost"])
+    info = {"medidas": medidas, "peso_g": peso, "costo": None, "lineas": []}
+    if not (medidas and peso):
+        info["lineas"].append("Faltan MEDIDAS PAQUETE o PESO GR: no se puede calcular el costo de envío.")
+        return info
+    vol = catalogo.peso_facturable(medidas, peso)
+    det = catalogo.envio_vendedor(ml, medidas, peso, precio, config_ml()["tipo_publicacion"])
+    info.update(det, volumetrico=bool(vol and vol[1]))
+    cobrado = det.get("peso_cobrado_g") or (vol[0] * 1000 if vol else peso)
+    info["lineas"].append(f"Paquete: {medidas.replace('x', ' × ')} cm · {_kg(peso)}")
+    info["lineas"].append(f"Mercado Libre lo cobra como {_kg(cobrado)}"
+                          + (" (peso volumétrico: el paquete abulta más de lo que pesa)" if info["volumetrico"] else ""))
+    tarifa = f" (tarifa {_plata(det['tarifa'])} con {int(round(det['descuento'] * 100))} % de descuento)" \
+        if det.get("descuento") else ""
+    info["lineas"].append(f"Costo de envío para La Loba: {_plata(det['costo'])} por venta{tarifa}")
+    return info
 
 
 def simular(p, ml: MercadoLibreClient | None = None) -> dict:
     """Arma la publicación de p y la valida en Mercado Libre sin crearla."""
     ml = ml or MercadoLibreClient()
     cfg = config_ml()
-    res = {"ref": p.ref_interna, "titulo": p.titulo, "ok": False, "errores": [], "avisos": [], "item": None}
+    res = {"ref": p.ref_interna, "titulo": p.titulo, "ok": False, "errores": [], "avisos": [], "item": None,
+           "envio": None}
     try:
+        _revisar_envio(ml, p, res)
         fotos = fotos_de(p.ref_interna, cfg["carpeta_fotos_id"])
         if not fotos:
             res["errores"].append("No hay fotos en la carpeta de Drive (REF-1.jpg…).")
@@ -328,6 +371,26 @@ def simular(p, ml: MercadoLibreClient | None = None) -> dict:
     finally:
         _guardar_log(res)
     return res
+
+
+def _revisar_envio(ml: MercadoLibreClient, p, res: dict) -> None:
+    """Agrega a res["envio"] el paquete y su costo; avisa si el precio ML no alcanza a cubrirlo."""
+    try:
+        info = info_envio(ml, p, getattr(p, "medidas_paquete", "") or "", p.peso_gr, p.precio_ml or 0)
+    except (MercadoLibreError, KeyError) as e:
+        logger.warning("No se pudo consultar el costo de envío de %s: %s", p.ref_interna, e)
+        res["envio"] = {"lineas": [f"No se pudo consultar el costo de envío: {e}"], "costo": None}
+        return
+    res["envio"] = info
+    costo = info.get("costo")
+    if costo is None or not p.precio_ml:
+        return
+    recibe = p.precio_ml - (p.comision or 0) - costo
+    info["lineas"].append(f"Recibiría La Loba: {_plata(recibe)} (precio en el local {_plata(p.precio_local or 0)})")
+    if costo > (p.envio or 0) and recibe < (p.precio_local or 0):
+        res["avisos"].append(
+            f"El precio ML se calculó con {_plata(p.envio or 0)} de envío, pero Mercado Libre cobraría "
+            f"{_plata(costo)}: La Loba recibiría menos que en el local. Actualiza la lista para recalcular el precio.")
 
 
 def _guardar_log(res: dict) -> None:
@@ -433,6 +496,7 @@ def publicar(p, ml: MercadoLibreClient | None = None) -> dict:
         res.update(ok=True, item_id=creado.get("id"), permalink=creado.get("permalink"),
                    status=creado.get("status"), titulo_ml=creado.get("title"))
         logger.info("Publicado en ML: %s → %s %s", p.ref_interna, res["item_id"], res["permalink"])
+        _comparar_paquete(ml, p, item, creado, res)
 
         # 3) descripción (si falla, la publicación ya existe: se avisa para reintentar)
         try:
@@ -448,6 +512,27 @@ def publicar(p, ml: MercadoLibreClient | None = None) -> dict:
     finally:
         _guardar_log({**res, "ref": f"{p.ref_interna}_publicacion"})
     return res
+
+
+def _comparar_paquete(ml: MercadoLibreClient, p, enviado: dict, creado: dict, res: dict) -> None:
+    """Avisa si Mercado Libre dejó otras medidas o peso del paquete que los enviados (y el nuevo costo)."""
+    try:
+        medidas_env, peso_env = paquete_de(enviado.get("attributes"))
+        atributos = creado.get("attributes") or (ml.get(f"/items/{creado.get('id')}") or {}).get("attributes")
+        medidas_ml, peso_ml = paquete_de(atributos)
+        if not (medidas_env and medidas_ml):
+            return
+        if _mismo_paquete(medidas_env, medidas_ml) and abs((peso_ml or 0) - (peso_env or 0)) <= 50:
+            return
+        aviso = (f"Mercado Libre cambió el paquete: se enviaron {medidas_env.replace('x', ' × ')} cm y "
+                 f"{_kg(peso_env or 0)}, y quedó {medidas_ml.replace('x', ' × ')} cm y {_kg(peso_ml or 0)}.")
+        if peso_ml:
+            det = catalogo.envio_vendedor(ml, medidas_ml, peso_ml, p.precio_ml, config_ml()["tipo_publicacion"])
+            aviso += f" Con eso el envío cuesta {_plata(det['costo'])} por venta (el precio usó {_plata(p.envio or 0)})."
+        res["avisos"].append(aviso)
+        logger.warning("ML cambió el paquete de %s: %s → %s", p.ref_interna, medidas_env, medidas_ml)
+    except Exception:
+        logger.warning("No se pudo comparar el paquete publicado de %s", p.ref_interna, exc_info=True)
 
 
 # ── actualizar descripción ─────────────────────────────────────────────────────

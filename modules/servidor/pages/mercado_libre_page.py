@@ -499,12 +499,23 @@ class MercadoLibrePage(GenericPage):
 
         # ── columna derecha: lo que vería el comprador ──
         recibe = p.precio_ml - p.comision - p.envio
-        if p.precio_ml < cfg["umbral_envio_gratis"]:
-            texto_envio, envio_desglose, color_envio = "Envío a cargo del comprador", "—", tenue
-        elif p.envio:
-            texto_envio, envio_desglose, color_envio = "Envío gratis", "+ " + plata(p.envio), ft.Colors.GREEN_700
+        # Mercado Libre cobra el envío en todas las ventas; bajo el umbral la tarifa es menor
+        # (el comprador paga su parte), desde el umbral el envío gratis es obligatorio.
+        gratis = p.precio_ml >= cfg["umbral_envio_gratis"]
+        faltan_paquete = not (p.medidas_paquete and p.peso_gr)
+        if faltan_paquete:
+            texto_envio = "Falta MEDIDAS PAQUETE o PESO GR: el envío no está en el precio"
+            envio_desglose, color_envio = "⚠ no incluido", ft.Colors.RED_700
         else:
-            texto_envio, envio_desglose, color_envio = "Envío gratis obligatorio: falta MEDIDAS PAQUETE", "⚠ no incluido", ft.Colors.RED_700
+            texto_envio = "Envío gratis" if gratis else "Envío a cargo del comprador"
+            envio_desglose = "+ " + plata(p.envio)
+            color_envio = ft.Colors.GREEN_700 if gratis else tenue
+        facturable = catalogo.peso_facturable(p.medidas_paquete, p.peso_gr)
+        if facturable:
+            kg = f"{facturable[0]:.1f}".replace(".", ",")
+            texto_cobro = f"{kg} kg" + (" (volumétrico)" if facturable[1] else "")
+        else:
+            texto_cobro = "—"
         cantidad = max((p.stock or 0) - cfg["stock_reserva"], 0)
         tipo = "Clásica" if cfg["tipo_publicacion"] == "gold_special" else "Premium"
 
@@ -553,7 +564,7 @@ class MercadoLibrePage(GenericPage):
                 linea_precio("Precio en el local", plata(p.precio_local)),
                 *([linea_precio("Recargo ML (embalaje u otros)", "+ " + plata(p.recargo_ml))] if p.recargo_ml else []),
                 linea_precio("Comisión Mercado Libre", "+ " + plata(p.comision)),
-                linea_precio("Envío", envio_desglose,
+                linea_precio("Envío (lo cobra Mercado Libre en cada venta)", envio_desglose,
                              color=ft.Colors.RED_700 if envio_desglose.startswith("⚠") else None),
                 ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
                 linea_precio("Precio en Mercado Libre", plata(p.precio_ml), negrita=True),
@@ -567,6 +578,7 @@ class MercadoLibrePage(GenericPage):
                 detalle("Peso", f"{p.peso_gr} g" if p.peso_gr else "falta PESO GR", alerta=not p.peso_gr),
                 detalle("Paquete", f"{p.medidas_paquete} cm" if p.medidas_paquete else "falta MEDIDAS PAQUETE",
                         alerta=not p.medidas_paquete),
+                detalle("Peso para el envío", texto_cobro),
                 detalle("Stock en Odoo", "—" if p.stock is None else p.stock),
                 detalle("Planilla", f"{p.hoja} · fila {p.fila}"),
             ], wrap=True, spacing=8, run_spacing=10),
@@ -878,6 +890,9 @@ class MercadoLibrePage(GenericPage):
                     ], spacing=2, expand=True)], spacing=12),
             bgcolor=ft.Colors.with_opacity(0.08, color), border=ft.Border.all(1, color),
             border_radius=RADIO_TARJETA, padding=14)]
+        if r.get("envio") and r["envio"].get("lineas"):
+            contenido.append(seccion("Envío", ft.Icons.LOCAL_SHIPPING_OUTLINED, ft.Colors.PRIMARY,
+                                     r["envio"]["lineas"]))
         if r["errores"]:
             contenido.append(seccion("Lo que impide publicar", ft.Icons.ERROR_OUTLINE, ft.Colors.RED_700,
                                      r["errores"]))

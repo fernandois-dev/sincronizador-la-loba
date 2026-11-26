@@ -56,7 +56,8 @@ COLS_ML_RESERVADAS = {"ML", "CATEGORIA ML", "CATEGORÍA ML", "TITULO ML", "TÍTU
 COL_RECARGO = "RECARGO ML"
 COL_DESCRIPCION = "DESCRIPCION ML"   # texto plano; la IA propone si está vacía (también vale "DESCRIPCIÓN ML")
 COL_MEDIDAS = "MEDIDAS PAQUETE"   # "LxAxH" en cm del paquete ya embalado, p. ej. 150x40x40
-UMBRAL_ENVIO_GRATIS = 19990       # desde este precio ML obliga a ofrecer envío gratis (lo paga el vendedor)
+UMBRAL_ENVIO_GRATIS = 19990       # desde este precio ML obliga a ofrecer envío gratis (tarifa más alta)
+DIVISOR_VOLUMETRICO = 4000        # peso volumétrico (kg) = largo × ancho × alto (cm) / 4000
 MAX_TITULO = 60
 VALORES_SI = {"TRUE", "SI", "SÍ", "X", "✓", "✔", "1"}
 
@@ -290,7 +291,7 @@ class _CacheML:
         self.tipo = tipo_publicacion
         self._categorias: dict[str, str] = {}
         self._comisiones: dict[tuple, dict] = {}
-        self._envios: dict[tuple, int] = {}
+        self._envios: dict[tuple, dict] = {}
         self._atributos: dict[str, list] = {}
         self._defectos: dict[str, list] = {}
         self._uid = None
@@ -328,16 +329,19 @@ class _CacheML:
             return ""
 
     def envio(self, medidas: str, peso: float, precio: int) -> int:
-        """Lo que paga el vendedor por el envío gratis de un paquete (medidas cm, peso g)."""
-        clave = (medidas, int(peso), precio)
-        if clave not in self._envios:
-            uid = self._uid or self.ml.usuario_actual()["id"]
-            self._uid = uid
-            r = self.ml.get(f"/users/{uid}/shipping_options/free", params={
-                "dimensions": f"{medidas},{int(peso)}", "item_price": precio, "listing_type_id": self.tipo,
-                "mode": "me2", "condition": "new", "logistic_type": "xd_drop_off", "verbose": "true"})
-            self._envios[clave] = int(round(r["coverage"]["all_country"]["list_cost"]))
-        return self._envios[clave]
+        """
+        Lo que Mercado Libre le descuenta a La Loba por el envío de un paquete (medidas cm, peso g).
+        Se cobra en TODAS las ventas con Envíos de Mercado Libre, también bajo el umbral de envío
+        gratis (ahí es una tarifa menor, aunque el comprador pague su parte). La consulta ya
+        aplica la reputación y los descuentos de la cuenta.
+        """
+        return envio_vendedor(self.ml, medidas, peso, precio, self.tipo, cache=self._envios,
+                              uid=self._uid_actual())["costo"]
+
+    def _uid_actual(self):
+        if not self._uid:
+            self._uid = self.ml.usuario_actual()["id"]
+        return self._uid
 
     def comision(self, cat_id: str, precio: int) -> dict:
         clave = (cat_id, precio)
@@ -346,6 +350,42 @@ class _CacheML:
                             params={"price": precio, "category_id": cat_id, "listing_type_id": self.tipo})
             self._comisiones[clave] = r
         return self._comisiones[clave]
+
+
+def peso_facturable(medidas: str, peso_gr: float | None) -> tuple[float, bool] | None:
+    """(kg que cobra ML, True si manda el volumétrico) para 'LxAxH' cm y peso en gramos; None si faltan."""
+    nums = [float(x) for x in (medidas or "").split("x") if x]
+    if len(nums) != 3 or not peso_gr:
+        return None
+    volumetrico = nums[0] * nums[1] * nums[2] / DIVISOR_VOLUMETRICO
+    real = float(peso_gr) / 1000
+    return (volumetrico, True) if volumetrico > real else (real, False)
+
+
+def envio_vendedor(ml: MercadoLibreClient, medidas: str, peso: float, precio: int, tipo: str,
+                   cache: dict | None = None, uid=None) -> dict:
+    """
+    Costo de envío para el vendedor según Mercado Libre (/users/{id}/shipping_options/free):
+    {"costo": lo que se descuenta (redondeado hacia arriba), "tarifa": sin descuento,
+     "descuento": tasa 0–1, "peso_cobrado_g": peso que usó ML}. Sin indicar free_shipping,
+    ML responde lo que corresponde al precio: bajo el umbral la tarifa sin envío gratis,
+    desde el umbral la del envío gratis obligatorio.
+    """
+    clave = (medidas, int(peso), int(precio), tipo)
+    if cache is not None and clave in cache:
+        return cache[clave]
+    uid = uid or ml.usuario_actual()["id"]
+    r = ml.get(f"/users/{uid}/shipping_options/free", params={
+        "dimensions": f"{medidas},{int(peso)}", "item_price": int(precio), "listing_type_id": tipo,
+        "mode": "me2", "condition": "new", "logistic_type": "xd_drop_off", "verbose": "true"})
+    cob = r["coverage"]["all_country"]
+    desc = cob.get("discount") or {}
+    costo = int(math.ceil(float(cob["list_cost"]) - 1e-6))
+    det = {"costo": costo, "tarifa": int(round(desc.get("promoted_amount") or costo)),
+           "descuento": float(desc.get("rate") or 0), "peso_cobrado_g": cob.get("billable_weight")}
+    if cache is not None:
+        cache[clave] = det
+    return det
 
 
 def monto_comision(respuesta: dict) -> int:
@@ -366,14 +406,14 @@ def _redondear(p: float) -> int:
 def calcular_precio_ml(cache: _CacheML, precio_local: float, cat_id: str, medidas: str = "",
                        peso: float | None = None, umbral: int = UMBRAL_ENVIO_GRATIS) -> tuple[int, int, int | None]:
     """
-    Precio ML tal que, descontadas la comisión real de Mercado Libre y (si el precio
-    llega al mínimo de envío gratis) el costo del envío, se reciba al menos PRECIO LOCAL.
-    Devuelve (precio_ml, comision, envio). envio es None si el envío gratis es
-    obligatorio pero faltan medidas o peso para calcularlo (no queda incluido).
+    Precio ML tal que, descontadas la comisión real de Mercado Libre y el costo de envío que
+    ML le cobra a La Loba, se reciba al menos PRECIO LOCAL. El envío se cobra en todas las
+    ventas (bajo el umbral es una tarifa menor, pero no es cero), así que siempre se consulta.
+    Devuelve (precio_ml, comision, envio). envio es None si faltan medidas o peso para
+    calcularlo (no queda incluido). `umbral` se mantiene por compatibilidad: ML ya aplica
+    la tarifa que corresponde a cada precio.
     """
     def envio_para(precio):
-        if precio < umbral:
-            return 0
         if not (medidas and peso):
             return None
         return cache.envio(medidas, peso, precio)
@@ -498,9 +538,10 @@ def construir_catalogo() -> tuple[list[dict], list[str]]:
                     cache, f["precio"] + recargo, cat, f["medidas"], f["peso"], cfg["umbral_envio_gratis"])
                 if envio is None:
                     envio = 0
-                    pend.append("sin MEDIDAS PAQUETE (envío gratis obligatorio, no incluido en el precio)"
-                                if f["tiene_col_medidas"] else
-                                "la hoja no tiene columna MEDIDAS PAQUETE (envío no incluido en el precio)")
+                    if not f["medidas"]:
+                        pend.append("sin MEDIDAS PAQUETE (costo de envío no incluido en el precio)"
+                                    if f["tiene_col_medidas"] else
+                                    "la hoja no tiene columna MEDIDAS PAQUETE (costo de envío no incluido en el precio)")
             except (MercadoLibreError, KeyError) as e:
                 pend.append("categoría inválida")
                 logger.warning("No se pudo calcular precio ML de %s (%s): %s", f["ref"], cat, e)
