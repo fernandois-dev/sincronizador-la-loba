@@ -18,7 +18,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-from openai import RateLimitError
 
 from modules.ia.config import cargar_config
 from modules.ia.embeddings import cliente_embeddings, huella, parametros
@@ -26,6 +25,11 @@ from logger_config import get_logger
 from modules.servidor.models import OdooProducto
 
 logger = get_logger(__name__)
+
+
+def _RateLimitError():  # noqa: N802 - devuelve la clase; openai se carga solo al indexar
+    from openai import RateLimitError
+    return RateLimitError
 
 ARCHIVO = Path("data/ia/indice_productos.npz")
 
@@ -138,7 +142,7 @@ def actualizar(todo: bool = False, avisar=print) -> dict:
         ultima = time.monotonic()
         try:
             r = cliente.embeddings.create(input=[actuales[i] for i in grupo], **parametros(cfg, "passage"))
-        except RateLimitError:
+        except _RateLimitError():
             esperas += 1
             if esperas > MAX_ESPERAS:
                 _guardar(datos, h)

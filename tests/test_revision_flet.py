@@ -21,6 +21,7 @@ HILOS_PERMITIDOS = {
     "main.py",
     "modules/servidor/reportes/scheduler.py",
     "modules/ia/indexador.py",          # índice de productos en segundo plano, sin pantalla
+    "modules/servidor/google_sheet.py",  # abre las planillas en segundo plano al iniciar, sin pantalla
     "apps/sincronizador_ml/panel.py",   # servidor HTTP del panel web (otro programa)
     "apps/sincronizador_ml/motor.py",   # bucle del sincronizador ML (otro programa)
 }

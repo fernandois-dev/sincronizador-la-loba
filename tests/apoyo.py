@@ -135,6 +135,7 @@ def _google_falso():
     def sin_google(name):
         raise ServicioBloqueado(f"Google Sheets bloqueado en pruebas: {name}")
 
+    gs._get_workbook_real = getattr(gs, "_get_workbook_real", gs._get_workbook)
     gs._get_workbook = sin_google
     gs.GoogleService.get_hojas = staticmethod(lambda: [HOJA_PRUEBA])
 

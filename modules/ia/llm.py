@@ -14,8 +14,6 @@ respaldo fallaría igual, así que el error se propaga.
 import time
 from dataclasses import dataclass
 
-from openai import APIError, BadRequestError, OpenAI
-
 from logger_config import get_logger
 from modules.ia.config import ConfigIA
 
@@ -46,12 +44,14 @@ class Uso:
 @dataclass
 class _Destino:
     nombre: str
-    cliente: OpenAI
+    cliente: "OpenAI"  # noqa: F821 (openai se importa al usarse)
     modelo: str
 
 
 class ClienteLLM:
     def __init__(self, cfg: ConfigIA):
+        from openai import OpenAI  # se carga al usar la IA, no al abrir la app (~0,5 s)
+
         self.cfg = cfg
         hay_respaldo = bool(cfg.resp_proveedor and cfg.resp_api_key and cfg.resp_modelo)
         # Con respaldo, el principal no reintenta (pasar al respaldo es más rápido que esperar).
@@ -78,6 +78,8 @@ class ClienteLLM:
 
     def completar(self, mensajes: list[dict], herramientas: list[dict] | None = None):
         """Una llamada al modelo (con respaldo). Devuelve (mensaje, uso de esta llamada)."""
+        from openai import APIError, BadRequestError
+
         ultimo_error = None
         for i, destino in enumerate(self._destinos):
             kwargs = {"model": destino.modelo, "messages": mensajes, "temperature": self.cfg.temperatura}
