@@ -146,6 +146,12 @@ def test_formulario_en_la_vista_previa_guarda_en_fichas(monkeypatch, hoja, error
         assert [d for d in app.page._dialogs.controls if d.open], "no se abrió la vista previa"
         assert problemas_en_controles(app.page) == []
 
+        dlg = next(d for d in app.page._dialogs.controls if d.open)
+
+        def boton_publicar():
+            return next(b for b in dlg.actions if getattr(b, "content", None) == "Publicar")
+
+        assert boton_publicar().disabled  # faltan datos
         form = next(o for o in gc.get_objects() if isinstance(o, FormularioDatosML) and o.p is p)
         assert isinstance(form.campos["Material del relleno"], ft.Dropdown)
         assert isinstance(form.campos["Cantidad de envases"], ft.TextField)
@@ -157,6 +163,7 @@ def test_formulario_en_la_vista_previa_guarda_en_fichas(monkeypatch, hoja, error
 
         assert app.errores_envio == [], app.errores_envio
         assert problemas_en_controles(app.page) == []
+        assert not boton_publicar().disabled, boton_publicar().tooltip  # listo: se puede publicar
         await app.terminar()
         return p
 

@@ -588,6 +588,9 @@ class MercadoLibrePage(GenericPage):
         def tras_guardar_datos(faltan):
             # la tarjeta es Column([encabezado, divisor, *controles]): se rehacen los controles
             estado.content.controls = estado.content.controls[:2] + controles_estado()
+            # el botón Publicar depende del estado: se rehace (acciones = [Simular, *publicar, Cerrar])
+            dlg.actions = [dlg.actions[0], *self._acciones_publicar(p, cantidad, lambda: abrir_unico(self.page, dlg)),
+                           dlg.actions[-1]]
             self.update_filtered_view()
             abrir_unico(self.page, dlg)
 
