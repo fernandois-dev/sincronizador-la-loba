@@ -457,16 +457,6 @@ class MercadoLibrePage(GenericPage):
             return ft.IconButton(ft.Icons.CONTENT_COPY, icon_size=14, tooltip=f"Copiar {que}",
                                  on_click=lambda e: servicios.copiar(self.page, texto, f"{que} copiado"))
 
-        def dato(icono, etiqueta, valor, color=None, alerta=False, copiable=False):
-            color = ft.Colors.RED_700 if alerta else color
-            return ft.Row([
-                ft.Icon(ft.Icons.WARNING_AMBER if alerta else icono, size=16, color=color or tenue),
-                ft.Text(etiqueta, size=12, color=tenue, width=140),
-                ft.Text(str(valor), size=13, color=color, expand=True, selectable=True,
-                        weight=ft.FontWeight.W_500 if alerta else None),
-                *([boton_copiar(str(valor), etiqueta)] if copiable and valor not in (None, "", "—") else []),
-            ], spacing=8)
-
         def linea_precio(etiqueta, valor, negrita=False, color=None, tamano=13):
             peso = ft.FontWeight.BOLD if negrita else None
             return ft.Row([ft.Text(etiqueta, size=tamano, color=None if negrita else tenue, weight=peso),
@@ -475,7 +465,7 @@ class MercadoLibrePage(GenericPage):
 
         # ── fotos: principal grande + miniaturas que la cambian ──
         if fotos:
-            principal = ft.Image(src=fotos[0], width=360, height=360, fit=ft.BoxFit.CONTAIN)
+            principal = ft.Image(src=fotos[0], width=280, height=280, fit=ft.BoxFit.CONTAIN)
             miniaturas = []
 
             def elegir(i):
@@ -494,9 +484,9 @@ class MercadoLibrePage(GenericPage):
             galeria = ft.Column([
                 ft.Container(principal, bgcolor=ft.Colors.SURFACE_CONTAINER_LOWEST, border_radius=RADIO_TARJETA, padding=10,
                              border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT)),
-                ft.Row(miniaturas, wrap=True, spacing=6, width=380),
+                ft.Row(miniaturas, wrap=True, spacing=6, width=300),
                 ft.Text(f"{len(fotos)} foto{'s' if len(fotos) != 1 else ''} en Drive", size=11, color=tenue),
-            ], spacing=8, width=380)
+            ], spacing=8, width=300)
         else:
             galeria = ft.Container(
                 ft.Column([ft.Icon(ft.Icons.HIDE_IMAGE, size=48, color=ft.Colors.RED_300),
@@ -504,7 +494,7 @@ class MercadoLibrePage(GenericPage):
                            ft.Text("Súbelas a la carpeta de Drive como REF-1.jpg, REF-2.jpg…",
                                    size=11, color=tenue, text_align=ft.TextAlign.CENTER)],
                           horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER),
-                width=380, height=380, border_radius=RADIO_TARJETA, bgcolor=_FONDO_TARJETA,
+                width=300, height=300, border_radius=RADIO_TARJETA, bgcolor=_FONDO_TARJETA,
                 border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT), padding=20)
 
         # ── columna derecha: lo que vería el comprador ──
@@ -518,26 +508,47 @@ class MercadoLibrePage(GenericPage):
         cantidad = max((p.stock or 0) - cfg["stock_reserva"], 0)
         tipo = "Clásica" if cfg["tipo_publicacion"] == "gold_special" else "Premium"
 
-        comprador = ft.Column([
-            ft.Text(f"Nuevo · Publicación {tipo}", size=12, color=tenue),
-            ft.Row([ft.Text(p.titulo or p.producto, size=22, weight=ft.FontWeight.BOLD, selectable=True, expand=True),
+        def chip_estado():
+            return ft.Container(ft.Text(p.estado, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK_87),
+                                bgcolor=_COLOR_ESTADO.get(p.estado, ft.Colors.GREY_200), border_radius=RADIO_CHIP,
+                                padding=ft.Padding.symmetric(vertical=4, horizontal=12))
+
+        def detalle(etiqueta, valor, alerta=False, copiable=False):
+            """Par etiqueta / valor compacto para la grilla de detalles."""
+            return ft.Container(ft.Column([
+                ft.Text(etiqueta, size=11, color=tenue),
+                ft.Row([ft.Text(str(valor), size=13, selectable=True, weight=ft.FontWeight.W_500,
+                                color=ft.Colors.RED_700 if alerta else None),
+                        *([ft.IconButton(ft.Icons.CONTENT_COPY, icon_size=13, tooltip=f"Copiar {etiqueta}",
+                                         style=ft.ButtonStyle(padding=0), width=24, height=24,
+                                         on_click=lambda e: servicios.copiar(self.page, str(valor),
+                                                                             f"{etiqueta} copiado"))]
+                          if copiable and valor not in (None, "", "—") else [])],
+                       spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ], spacing=0), width=165)
+
+        # ── pestaña Resumen: lo que vería el comprador y lo que recibe La Loba ──
+        resumen = ft.Column([
+            ft.Row([ft.Text(p.titulo or p.producto, size=20, weight=ft.FontWeight.BOLD, selectable=True, expand=True),
                     boton_copiar(p.titulo or p.producto, "Título")], vertical_alignment=ft.CrossAxisAlignment.START),
             ft.Row([*propuesta(p.titulo_propuesta),
-                    ft.Text(f"{len(p.titulo or '')}/{catalogo.MAX_TITULO} caracteres", size=11, color=tenue)],
-                   spacing=8),
+                    ft.Text(f"{len(p.titulo or '')}/{catalogo.MAX_TITULO} caracteres · Nuevo · Publicación {tipo}",
+                            size=11, color=tenue)], spacing=8),
             ft.Row([ft.Text(p.marca or "Sin marca", size=13, weight=ft.FontWeight.W_500), *propuesta(p.marca_propuesta),
                     ft.Text("·", color=tenue), ft.Text(p.categoria_nombre or "Sin categoría", size=13, color=tenue,
-                                                       expand=True, selectable=True),
-                    *propuesta(p.categoria_propuesta)], spacing=6),
-            ft.Container(height=4),
-            ft.Text(plata(p.precio_ml), size=34, weight=ft.FontWeight.W_300),
-            ft.Row([ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, size=18, color=color_envio),
-                    ft.Text(texto_envio, size=13, color=color_envio, weight=ft.FontWeight.W_500)], spacing=6),
-            ft.Row([ft.Icon(ft.Icons.INVENTORY_2_OUTLINED, size=18,
-                            color=ft.Colors.RED_700 if cantidad <= 0 else tenue),
-                    ft.Text(f"{cantidad} disponibles" if cantidad > 0 else "Sin stock para publicar",
-                            size=13, color=ft.Colors.RED_700 if cantidad <= 0 else None)], spacing=6),
-            ft.Container(height=4),
+                                                       selectable=True),
+                    *propuesta(p.categoria_propuesta)], spacing=6, wrap=True),
+            ft.Row([
+                ft.Text(plata(p.precio_ml), size=32, weight=ft.FontWeight.W_300),
+                ft.Column([
+                    ft.Row([ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, size=16, color=color_envio),
+                            ft.Text(texto_envio, size=12, color=color_envio, weight=ft.FontWeight.W_500)], spacing=6),
+                    ft.Row([ft.Icon(ft.Icons.INVENTORY_2_OUTLINED, size=16,
+                                    color=ft.Colors.RED_700 if cantidad <= 0 else tenue),
+                            ft.Text(f"{cantidad} disponibles" if cantidad > 0 else "Sin stock para publicar",
+                                    size=12, color=ft.Colors.RED_700 if cantidad <= 0 else None)], spacing=6),
+                ], spacing=2),
+            ], spacing=24, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             tarjeta("Lo que recibe La Loba", ft.Icons.PAYMENTS_OUTLINED, [
                 linea_precio("Precio en el local", plata(p.precio_local)),
                 *([linea_precio("Recargo ML (embalaje u otros)", "+ " + plata(p.recargo_ml))] if p.recargo_ml else []),
@@ -548,50 +559,75 @@ class MercadoLibrePage(GenericPage):
                 linea_precio("Precio en Mercado Libre", plata(p.precio_ml), negrita=True),
                 linea_precio("Recibe La Loba", plata(recibe), negrita=True, color=ft.Colors.GREEN_700, tamano=15),
             ], expand=False),
-        ], spacing=6, expand=True)
+            ft.Text("Detalles", size=13, weight=ft.FontWeight.BOLD),
+            ft.Row([
+                detalle("SKU (REF INTERNA)", p.ref_interna, copiable=True),
+                detalle("Código de barras", p.barcode or "—", copiable=True),
+                detalle("Categoría ML", p.categoria_id or "falta", alerta=not p.categoria_id),
+                detalle("Peso", f"{p.peso_gr} g" if p.peso_gr else "falta PESO GR", alerta=not p.peso_gr),
+                detalle("Paquete", f"{p.medidas_paquete} cm" if p.medidas_paquete else "falta MEDIDAS PAQUETE",
+                        alerta=not p.medidas_paquete),
+                detalle("Stock en Odoo", "—" if p.stock is None else p.stock),
+                detalle("Planilla", f"{p.hoja} · fila {p.fila}"),
+            ], wrap=True, spacing=8, run_spacing=10),
+        ], spacing=10, scroll=ft.ScrollMode.AUTO)
 
-        # ── ficha técnica y estado ──
-        ficha = tarjeta("Ficha", ft.Icons.LIST_ALT, [
-            dato(ft.Icons.TAG, "SKU (REF INTERNA)", p.ref_interna, copiable=True),
-            dato(ft.Icons.QR_CODE_2, "Código de barras", p.barcode or "—", copiable=True),
-            dato(ft.Icons.CATEGORY_OUTLINED, "Categoría ML", p.categoria_id or "—", alerta=not p.categoria_id),
-            dato(ft.Icons.SCALE_OUTLINED, "Peso", f"{p.peso_gr} g" if p.peso_gr else "falta PESO GR",
-                 alerta=not p.peso_gr),
-            dato(ft.Icons.STRAIGHTEN, "Medidas del paquete",
-                 f"{p.medidas_paquete} cm" if p.medidas_paquete else "falta MEDIDAS PAQUETE", alerta=not p.medidas_paquete),
-            dato(ft.Icons.WAREHOUSE_OUTLINED, "Stock en Odoo", "—" if p.stock is None else p.stock),
-            dato(ft.Icons.STORE_OUTLINED, "Despacho", "Punto de despacho Mercado Libre"),
-            dato(ft.Icons.TABLE_CHART_OUTLINED, "Planilla", f"{p.hoja} · fila {p.fila}"),
-        ])
+        # ── aviso de lo que falta (bajo el título; reemplaza la tarjeta "Para publicar") ──
+        aviso = ft.Container(visible=False, border_radius=RADIO_TARJETA, padding=ft.Padding.symmetric(vertical=10, horizontal=14))
 
-        def controles_estado():
-            # "faltan datos ML: A, B" va en una sola línea (es siempre lo último)
+        def actualizar_aviso():
             base, _, faltan = (p.pendientes or "").partition(catalogo.PREFIJO_FALTAN_DATOS)
             pendientes = [x.strip(" ,") for x in base.split(", ") if x.strip(" ,")]
-            if faltan.strip():
-                pendientes.append(catalogo.PREFIJO_FALTAN_DATOS + faltan.strip())
-            return [
-            ft.Container(ft.Text(p.estado, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK_87),
-                         bgcolor=_COLOR_ESTADO.get(p.estado, ft.Colors.GREY_200), border_radius=RADIO_CHIP,
-                         padding=ft.Padding.symmetric(vertical=4, horizontal=12)),
-            *([ft.Row([ft.Icon(ft.Icons.ERROR_OUTLINE, size=16, color=ft.Colors.RED_700),
-                       ft.Text(x, size=12, expand=True)], spacing=6) for x in pendientes]
-              or [ft.Row([ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=16, color=ft.Colors.GREEN_700),
-                          ft.Text("Sin datos pendientes", size=12)], spacing=6)]),
-            *([ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, size=16, color=ft.Colors.AMBER_800),
-                       ft.Text("Hay propuestas por aprobar en la planilla", size=12, expand=True)], spacing=6)]
-              if p.tiene_propuestas else []),
-            ]
+            faltan_ml = [x.strip() for x in faltan.split(",") if x.strip()]
+            lineas = list(pendientes)
+            if faltan_ml:
+                lineas.append("datos para Mercado Libre: " + ", ".join(faltan_ml))
+            if p.tiene_propuestas:
+                lineas.append("hay propuestas (título, marca, categoría o descripción) por aprobar en la planilla")
+            aviso.visible = bool(lineas)
+            if not lineas:
+                return
+            grave = bool(pendientes or faltan_ml)
+            color = ft.Colors.RED_800 if grave else ft.Colors.AMBER_900
+            aviso.bgcolor = ft.Colors.with_opacity(0.08, color)
+            aviso.border = ft.Border.all(1, ft.Colors.with_opacity(0.4, color))
+            aviso.content = ft.Row([
+                ft.Icon(ft.Icons.ERROR_OUTLINE if grave else ft.Icons.AUTO_AWESOME, color=color, size=20),
+                ft.Column([
+                    ft.Text("Antes de publicar falta:" if grave else "Para revisar:", size=13,
+                            weight=ft.FontWeight.BOLD, color=color),
+                    *[ft.Text(f"• {x}", size=12) for x in lineas],
+                ], spacing=2, expand=True),
+                *([ft.FilledTonalButton("Completar datos ML", icon=ft.Icons.EDIT_NOTE,
+                                        on_click=lambda e: ir_a_pestana(1))] if faltan_ml else []),
+            ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.START)
 
-        estado = tarjeta("Para publicar", ft.Icons.CHECKLIST, controles_estado())
+        actualizar_aviso()
+
+        def etiqueta_datos_ml():
+            faltan = (p.pendientes or "").partition(catalogo.PREFIJO_FALTAN_DATOS)[2]
+            n = len([x for x in faltan.split(",") if x.strip()])
+            return ft.Row([ft.Text("Datos ML"),
+                           *([ft.Container(ft.Text(str(n), size=11, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+                                           bgcolor=ft.Colors.RED_700, border_radius=10,
+                                           padding=ft.Padding.symmetric(vertical=1, horizontal=7))] if n else [])],
+                          spacing=6, tight=True)
+
+        chip = chip_estado()
+        tab_datos = ft.Tab(label=etiqueta_datos_ml(), icon=ft.Icons.FACT_CHECK_OUTLINED)
 
         def tras_guardar_datos(faltan):
-            # la tarjeta es Column([encabezado, divisor, *controles]): se rehacen los controles
-            estado.content.controls = estado.content.controls[:2] + controles_estado()
+            actualizar_aviso()
+            tab_datos.label = etiqueta_datos_ml()
+            nuevo = chip_estado()
+            chip.content, chip.bgcolor = nuevo.content, nuevo.bgcolor
+            # el botón Publicar depende del estado: se rehace (acciones = [Simular, *publicar, Cerrar])
+            dlg.actions = [dlg.actions[0], *self._acciones_publicar(p, cantidad, lambda: abrir_unico(self.page, dlg)),
+                           dlg.actions[-1]]
             self.update_filtered_view()
             abrir_unico(self.page, dlg)
 
-        datos_ml = FormularioDatosML(self.page, p, atributos_cat, tarjeta, al_guardar=tras_guardar_datos).control
+        datos_ml = FormularioDatosML(self.page, p, atributos_cat, None, al_guardar=tras_guardar_datos).control
 
         # ── descripción ──
         # El editor está siempre disponible (generar otra con IA, editar, guardar borrador, aprobar).
@@ -671,73 +707,74 @@ class MercadoLibrePage(GenericPage):
 
         btn_generar = ft.FilledTonalButton("Generar con IA", icon=ft.Icons.AUTO_AWESOME, on_click=generar_desc)
         btn_guardar = ft.OutlinedButton("Guardar borrador", icon=ft.Icons.SAVE_OUTLINED, on_click=guardar_desc)
-        btn_aprobar = ft.FilledButton("Aprobar y escribir en la planilla", icon=ft.Icons.FACT_CHECK,
-                                      on_click=aprobar_desc, disabled=not p.col_descripcion)
+        btn_aprobar = ft.FilledButton("Aprobar", icon=ft.Icons.FACT_CHECK, on_click=aprobar_desc,
+                                      disabled=not p.col_descripcion,
+                                      tooltip="Escribe esta descripción en la columna DESCRIPCION ML de la planilla")
 
-        editor_desc = tarjeta("Descripción", ft.Icons.NOTES, [
-            ft.Row([*propuesta(p.descripcion_propuesta and bool(p.descripcion)),
-                    ft.Text("Revisa el texto antes de aprobar: la IA puede equivocarse.", size=11,
-                            italic=True, color=tenue)], spacing=8),
-            # En Flet 1.x el TextField dentro de un Column no toma todo el ancho:
-            # se pone en un Row con expand para que ocupe la tarjeta completa.
+        # ── pestaña Descripción: un solo aviso arriba ──
+        if desde_planilla:
+            nota_desc = ("Aprobada en la planilla. Si la editas o generas otra y apruebas, se reemplaza la de la planilla.",
+                         ft.Icons.TABLE_CHART_OUTLINED, ft.Colors.GREEN_700)
+        elif p.descripcion and p.descripcion_propuesta:
+            nota_desc = ("Borrador sin aprobar (revísalo: la IA puede equivocarse). Se publica solo si lo apruebas.",
+                         ft.Icons.AUTO_AWESOME, ft.Colors.AMBER_900)
+        else:
+            nota_desc = ("Sin descripción. Genérala con IA o escríbela aquí.", ft.Icons.INFO_OUTLINE, tenue)
+        if not p.col_descripcion:
+            nota_desc = (nota_desc[0] + f" La pestaña no tiene columna {catalogo.COL_DESCRIPCION}: no se podrá aprobar.",
+                         ft.Icons.WARNING_AMBER, ft.Colors.AMBER_900)
+        btn_generar.tooltip = "Revisa el texto antes de aprobar: la IA puede equivocarse."
+        descripcion = ft.Column([
+            ft.Row([ft.Icon(nota_desc[1], size=16, color=nota_desc[2]),
+                    ft.Text(nota_desc[0], size=12, color=nota_desc[2], expand=True)], spacing=6),
+            # En Flet 1.x el TextField dentro de un Column no toma todo el ancho: va en un Row
             ft.Row([txt_desc]),
             ft.Row([modo_desc, btn_generar, btn_guardar, btn_aprobar],
                    wrap=True, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             estado_desc,
-            *([] if p.col_descripcion else [ft.Row([
-                ft.Icon(ft.Icons.WARNING_AMBER, size=16, color=ft.Colors.AMBER_900),
-                ft.Text(f"La pestaña no tiene columna {catalogo.COL_DESCRIPCION}: no se podrá aprobar.",
-                        size=11, color=ft.Colors.AMBER_900)], spacing=6)]),
-        ])
-
-        if desde_planilla:
-            # editor_desc.content = Column([encabezado, divisor, *controles]): la nota va bajo el divisor
-            editor_desc.content.controls.insert(2, ft.Row([
-                ft.Icon(ft.Icons.TABLE_CHART_OUTLINED, size=16, color=ft.Colors.GREEN_700),
-                ft.Text("Aprobada en la planilla. Si la editas o generas otra y apruebas, se reemplaza el texto "
-                        "de la planilla.", size=11, color=ft.Colors.GREEN_700, expand=True)], spacing=6))
-        descripcion = editor_desc
-
-        zona_simulacion = ft.Container(visible=False, border_radius=RADIO_TARJETA, padding=14)
+        ], spacing=10, scroll=ft.ScrollMode.AUTO)
 
         async def simular(e):
             self.loading.show(f"Simulando publicación de {p.ref_interna}...")
             r = await asyncio.to_thread(publicador.simular, p)
             self.loading.hide()
-            color = ft.Colors.GREEN_700 if r["ok"] else ft.Colors.RED_700
-            zona_simulacion.visible = True
-            zona_simulacion.bgcolor = ft.Colors.with_opacity(0.08, color)
-            zona_simulacion.border = ft.Border.all(1, color)
-            zona_simulacion.content = ft.Column([
-                ft.Row([ft.Icon(ft.Icons.CHECK_CIRCLE if r["ok"] else ft.Icons.CANCEL, color=color),
-                        ft.Text("Mercado Libre la aceptaría (no se publicó nada)" if r["ok"]
-                                else "Mercado Libre la rechazaría", weight=ft.FontWeight.BOLD, color=color)]),
-                *[ft.Text(f"✖ {x}", size=12, color=ft.Colors.RED_700) for x in r["errores"]],
-                *[ft.Text(f"⚠ {x}", size=12, color=ft.Colors.AMBER_900) for x in r["avisos"]],
-            ], spacing=4)
-            # El resultado se muestra de inmediato en su propia ventana (queda también al final
-            # de la vista previa como referencia).
+            # el resultado se muestra de inmediato en su propia ventana
             self._resultado_simulacion(p, r, cantidad, lambda: abrir_unico(self.page, dlg))
+
+        # ── pestañas ──
+        pestanas = ft.Tabs(
+            length=3, selected_index=0, expand=True,
+            content=ft.Column([
+                ft.TabBar(tabs=[ft.Tab(label="Resumen", icon=ft.Icons.STOREFRONT_OUTLINED), tab_datos,
+                                ft.Tab(label="Descripción", icon=ft.Icons.NOTES)],
+                          scrollable=False, tab_alignment=ft.TabAlignment.FILL),
+                ft.TabBarView(expand=True, controls=[
+                    ft.Container(resumen, padding=ft.Padding.only(top=12, right=8)),
+                    ft.Container(datos_ml, padding=ft.Padding.only(top=12, right=8)),
+                    ft.Container(descripcion, padding=ft.Padding.only(top=12, right=8)),
+                ]),
+            ], spacing=0, expand=True),
+        )
+
+        def ir_a_pestana(i):
+            pestanas.selected_index = i
+            pestanas.update()
 
         encabezado = ft.Row([
             ft.Icon(ft.Icons.STOREFRONT, color=ft.Colors.PRIMARY),
             ft.Text("Vista previa", size=18, weight=ft.FontWeight.BOLD),
             ft.Text(f"{p.ref_interna} · {p.producto}", size=13, color=tenue, expand=True,
                     overflow=ft.TextOverflow.ELLIPSIS),
-            ft.Container(ft.Text(p.estado, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK_87),
-                         bgcolor=_COLOR_ESTADO.get(p.estado, ft.Colors.GREY_200), border_radius=RADIO_CHIP,
-                         padding=ft.Padding.symmetric(vertical=4, horizontal=12)),
+            chip,
         ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
         dlg = ft.AlertDialog(
             title=encabezado,
             content=ft.Container(ft.Column([
-                ft.Row([galeria, comprador], spacing=24, vertical_alignment=ft.CrossAxisAlignment.START),
-                ft.Row([ficha, estado], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
-                datos_ml,
-                descripcion,
-                zona_simulacion,
-            ], scroll=ft.ScrollMode.AUTO, spacing=16), width=1000, height=640),
+                aviso,
+                ft.Row([galeria, pestanas], spacing=24, expand=True,
+                       vertical_alignment=ft.CrossAxisAlignment.START),
+            ], spacing=12), width=1080, height=600),
             actions=[
                 ft.OutlinedButton("Simular publicación", icon=ft.Icons.SCIENCE_OUTLINED, on_click=simular),
                 *self._acciones_publicar(p, cantidad, lambda: abrir_unico(self.page, dlg)),

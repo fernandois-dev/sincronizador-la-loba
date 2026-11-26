@@ -91,7 +91,10 @@ class FormularioDatosML:
         self.mostrar_opcionales = ft.Switch(label="Mostrar datos opcionales", value=False,
                                             on_change=self._alternar_opcionales)
         self.filas_opcionales: list[ft.Control] = []
-        self.control = tarjeta("Datos para Mercado Libre", ft.Icons.FACT_CHECK_OUTLINED, self._controles())
+        controles = self._controles()
+        # sin `tarjeta`: columna con scroll (para usarlo dentro de una pestaña)
+        self.control = (tarjeta("Datos para Mercado Libre", ft.Icons.FACT_CHECK_OUTLINED, controles) if tarjeta
+                        else ft.Column(controles, spacing=10, scroll=ft.ScrollMode.AUTO))
 
     # ── armado ──
     def _valor_actual(self, a: dict) -> tuple[str, str]:
@@ -103,11 +106,7 @@ class FormularioDatosML:
         defecto = self.defectos.get(normalizar_nombre(a.get("name", "")))
         return (defecto, fichas.ORIGEN_DEFECTO) if defecto else ("", "")
 
-    def _insignia(self, texto, color, fondo):
-        return ft.Container(ft.Text(texto, size=10, weight=ft.FontWeight.W_500, color=color),
-                            bgcolor=fondo, border_radius=10, padding=ft.Padding.symmetric(vertical=2, horizontal=8))
-
-    def _campo(self, a: dict, valor: str, bloqueado: bool) -> ft.Control:
+    def _campo(self, a: dict, valor: str, bloqueado: bool, ayuda: str | None = None) -> ft.Control:
         nombre = a.get("name", a["id"])
         opciones = [o.get("name", "") for o in (a.get("values") or []) if o.get("name")]
         tipo = a.get("value_type")
@@ -119,7 +118,8 @@ class FormularioDatosML:
             campo = ft.Dropdown(
                 value=valor or None, options=[ft.DropdownOption(o) for o in opciones], dense=True,
                 text_size=13, width=320, menu_height=320, editable=True, enable_filter=True,
-                hint_text="Escribe o elige" if libre else "Elige una opción", disabled=bloqueado)
+                hint_text="Escribe o elige" if libre else "Elige una opción", disabled=bloqueado,
+                helper_text=ayuda)
             if libre:
                 self.textos[nombre] = valor
 
@@ -129,6 +129,7 @@ class FormularioDatosML:
         else:
             sufijo = unidades[0] if unidades else None
             campo = ft.TextField(value=valor, dense=True, text_size=13, width=320, disabled=bloqueado,
+                                 helper=ayuda,
                                  suffix=sufijo,
                                  hint_text=f"Número en {sufijo}" if sufijo else
                                  ("Número" if tipo == "number" else None))
@@ -138,21 +139,22 @@ class FormularioDatosML:
     def _fila(self, a: dict) -> ft.Control:
         valor, origen = self._valor_actual(a)
         bloqueado = origen == "planilla"
-        chips = []
-        if obligatorio(a):
-            chips.append(self._insignia("obligatorio", ft.Colors.RED_900, ft.Colors.RED_50))
-        elif condicional(a):
-            chips.append(self._insignia("puede ser obligatorio", ft.Colors.AMBER_900, ft.Colors.AMBER_50))
         if origen == "planilla":
-            chips.append(self._insignia(f"columna {normalizar_nombre(a.get('name', ''))} ML", ft.Colors.BLUE_900,
-                                        ft.Colors.BLUE_50))
+            ayuda = f"Desde la columna {normalizar_nombre(a.get('name', ''))} ML de la planilla"
         elif origen == fichas.ORIGEN_DEFECTO:
-            chips.append(self._insignia("por defecto", ft.Colors.GREEN_900, ft.Colors.GREEN_50))
-        return ft.Row([
-            ft.Column([ft.Text(a.get("name", a["id"]), size=13, weight=ft.FontWeight.W_500),
-                       ft.Row(chips, spacing=4, wrap=True)], spacing=2, width=260),
-            self._campo(a, valor, bloqueado),
-        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            ayuda = "Valor por defecto de la categoría"
+        else:
+            ayuda = None
+        nombre = ft.Text(spans=[
+            ft.TextSpan(a.get("name", a["id"])),
+            *([ft.TextSpan(" *", style=ft.TextStyle(color=ft.Colors.RED_700, weight=ft.FontWeight.BOLD))]
+              if obligatorio(a) else
+              [ft.TextSpan(" *", style=ft.TextStyle(color=ft.Colors.AMBER_800, weight=ft.FontWeight.BOLD))]
+              if condicional(a) else []),
+        ], size=13, weight=ft.FontWeight.W_500)
+        return ft.Row([ft.Container(nombre, width=200, padding=ft.Padding.only(top=10)),
+                       self._campo(a, valor, bloqueado, ayuda)],
+                      spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
 
     def _controles(self) -> list[ft.Control]:
         if not self.p.categoria_id:
@@ -165,17 +167,23 @@ class FormularioDatosML:
         self.filas_opcionales = [self._fila(a) for a in opcionales]
         for f in self.filas_opcionales:
             f.visible = False
-        nota = ft.Text(
-            "Se guardan en la pestaña FICHAS ML de la Tabla Base (compartida entre los PC). "
-            "Si la pestaña del proveedor tiene una columna \"<DATO> ML\" con valor, esa manda.",
-            size=11, italic=True, color=ft.Colors.ON_SURFACE_VARIANT)
+        tenue = ft.Colors.ON_SURFACE_VARIANT
+        leyenda = ft.Text(spans=[
+            ft.TextSpan("*", style=ft.TextStyle(color=ft.Colors.RED_700, weight=ft.FontWeight.BOLD)),
+            ft.TextSpan(" obligatorio   "),
+            ft.TextSpan("*", style=ft.TextStyle(color=ft.Colors.AMBER_800, weight=ft.FontWeight.BOLD)),
+            ft.TextSpan(" puede ser obligatorio según otros datos"),
+        ], size=11, color=tenue)
+        nota = ft.Text("Se guardan en la pestaña FICHAS ML de la Tabla Base, compartida entre los PC.",
+                       size=11, color=tenue)
         return [
-            nota,
+            leyenda,
             *(filas or [ft.Text("Esta categoría no pide datos adicionales.", size=12)]),
             *([self.mostrar_opcionales] if self.filas_opcionales else []),
             *self.filas_opcionales,
             ft.Row([self.boton_guardar, self.estado], spacing=12, wrap=True,
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            nota,
         ]
 
     # ── acciones ──
