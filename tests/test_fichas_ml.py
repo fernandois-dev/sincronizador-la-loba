@@ -76,6 +76,21 @@ def test_guardar_y_leer_no_toca_otros_productos(hoja):
     assert all(f[3] == fichas.ORIGEN_MANUAL for f in hoja.celdas[1:] if f[0] == "ALG0001")
 
 
+def test_precio_fijado_se_guarda_aparte_y_no_es_atributo(hoja):
+    fichas.guardar("ALG0001", {"Material del relleno": "Poliéster"})
+    fichas.guardar_precio("alg0001", 4990)
+    # guardar los datos de la ficha (formulario) no borra el precio fijado
+    fichas.guardar("ALG0001", {"Material del relleno": "Algodón"})
+    ficha = fichas.leer_todas()["ALG0001"]
+    assert ficha == {"Material del relleno": "Algodón", fichas.DATO_PRECIO: "4990"}
+    limpia, precio = fichas.separar_precio(ficha)
+    assert limpia == {"Material del relleno": "Algodón"} and precio == 4990
+    # volver al automático lo quita
+    fichas.guardar_precio("ALG0001", None)
+    assert fichas.leer_todas()["ALG0001"] == {"Material del relleno": "Algodón"}
+    assert fichas.leer_todas()["OTRO1"] == {"Color": "Rojo"}
+
+
 def test_guardar_sin_ref_falla(hoja):
     with pytest.raises(ValueError):
         fichas.guardar("", {"Color": "Blanco"})
@@ -219,3 +234,92 @@ def test_simular_muestra_el_resultado_en_una_ventana(monkeypatch, ok, errores_lo
         await app.terminar()
 
     asyncio.run(prueba())
+
+
+def _buscar(control, pred, vistos=None):
+    """Primer control del árbol que cumple pred."""
+    vistos = vistos if vistos is not None else set()
+    if control is None or id(control) in vistos:
+        return None
+    vistos.add(id(control))
+    if pred(control):
+        return control
+    hijos = []
+    for attr in ("content", "controls", "actions", "title"):
+        v = getattr(control, attr, None)
+        hijos.extend(v if isinstance(v, list) else [v])
+    for h in hijos:
+        if hasattr(h, "__dict__"):
+            r = _buscar(h, pred, vistos)
+            if r is not None:
+                return r
+    return None
+
+
+def test_calculadora_de_precio_en_la_vista_previa(monkeypatch, hoja, errores_log):
+    """Quiero recibir $4.500 → precio con la comisión y el envío de hoy → 'Usar este precio'
+    lo guarda en FICHAS ML y la tarjeta 'Lo que recibe La Loba' muestra el desglose nuevo."""
+    import flet as ft
+    from modules.mercadolibre import publicador
+    from modules.servidor.pages import mercado_libre_page
+    from tests.apoyo import abrir_app, problemas_en_controles
+    from tests.test_envio_ml import MLFalso
+
+    monkeypatch.setattr(publicador, "miniaturas", lambda ref: [])
+    monkeypatch.setattr(publicador, "atributos_categoria", lambda cat, ml=None: ATRIBUTOS_COJINES)
+    monkeypatch.setattr(mercado_libre_page, "MercadoLibreClient", MLFalso)
+
+    def boton(dlg, texto):
+        return _buscar(dlg, lambda c: isinstance(c, (ft.FilledButton, ft.FilledTonalButton, ft.OutlinedButton,
+                                                     ft.TextButton)) and getattr(c, "content", None) == texto)
+
+    async def prueba():
+        app = await abrir_app()
+        p = _producto(estado=catalogo.ESTADO_LISTO, pendientes="", ref_interna="CALC1",
+                      medidas_paquete="28x28x28", precio_ml=5290, comision=0, comision_normal=846, envio=1330)
+        await asyncio.to_thread(p.save)
+        app.ir("/mercado_libre/productos")
+        await app.esperar()
+        pagina = app.page.controls[0].control_page.content
+        await pagina.vista_previa.ahora(pagina, [p])
+        await app.esperar()
+        dlg = next(d for d in app.page._dialogs.controls if d.open)
+        assert problemas_en_controles(app.page) == []
+
+        recibir = _buscar(dlg, lambda c: isinstance(c, ft.TextField) and c.label == "Quiero recibir")
+        precio = _buscar(dlg, lambda c: isinstance(c, ft.TextField) and c.label == "Precio de venta en ML")
+        assert recibir.value == "3900" and precio.value == "5290"
+        usar = boton(dlg, "Usar este precio")
+        assert usar.disabled
+
+        recibir.value = "4500"
+        await boton(dlg, "Calcular precio").on_click(None)
+        await app.esperar()
+        assert precio.value == "5890" and not usar.disabled
+
+        await usar.on_click(None)
+        await app.esperar()
+        assert p.precio_ml == 5890 and p.precio_ml_fijo and p.envio == 1330
+        assert boton(dlg, "Volver al precio automático").visible
+        textos = []
+        _buscar(dlg, lambda c: textos.append(getattr(c, "value", None)) and False)
+        assert "$5.890" in textos and "Precio fijado por ti con la calculadora." in textos
+
+        # probar un precio: muestra lo que se recibe sin cambiar el guardado
+        precio.value = "4990"
+        await boton(dlg, "Ver cuánto recibo").on_click(None)
+        await app.esperar()
+        assert recibir.value == "3660"
+
+        await boton(dlg, "Volver al precio automático").on_click(None)
+        await app.esperar()
+        assert p.precio_ml == 5290 and not p.precio_ml_fijo
+        assert app.errores_envio == [], app.errores_envio
+        assert problemas_en_controles(app.page) == []
+        await app.terminar()
+        return p
+
+    p = asyncio.run(prueba())
+    assert fichas.DATO_PRECIO not in fichas.leer_todas().get("CALC1", {})
+    from modules.servidor.models import ProductoML
+    assert ProductoML.objects.get(pk=p.pk).precio_ml == 5290

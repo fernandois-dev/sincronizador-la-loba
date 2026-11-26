@@ -12,6 +12,10 @@ Se puede leer y corregir a mano, una fila por dato:
     ALG0001     | Material del relleno  | Poliéster  | manual      | 2026-11-25 18:40
     ALG0001     | Cantidad de envases   | 1          | por defecto | 2026-11-25 18:40
 
+Además guarda el precio de venta en ML cuando el usuario lo fija con la calculadora
+de la vista previa: dato "PRECIO ML" (no es un dato de la categoría, no se envía como
+atributo; ver precio_fijo y guardar_precio).
+
 Orden de prioridad al publicar (ver catalogo.construir_catalogo):
   1. columnas "<DATO> ML" de la pestaña del proveedor (compatibilidad: si están, mandan)
   2. FICHAS ML
@@ -29,6 +33,8 @@ HOJA = "FICHAS ML"
 ENCABEZADOS = ["REF INTERNA", "DATO", "VALOR", "ORIGEN", "ACTUALIZADO"]
 ORIGEN_MANUAL = "manual"
 ORIGEN_DEFECTO = "por defecto"
+DATO_PRECIO = "PRECIO ML"          # precio fijado con la calculadora (reservado: no es atributo)
+RESERVADOS = {DATO_PRECIO}
 
 
 def _clave(texto: str) -> str:
@@ -89,10 +95,16 @@ def guardar(ref: str, valores: dict[str, str], origenes: dict[str, str] | None =
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
     nuevas = [[ref, dato, str(valor).strip(), origenes.get(dato, ORIGEN_MANUAL), ahora]
               for dato, valor in valores.items() if str(valor).strip()]
+    tocados = {_clave(d) for d in valores}
+    reservados = {_clave(d) for d in RESERVADOS}
 
     def escribir():
         ws = _hoja(crear=True)
-        otras = [f for f in _filas(ws) if f[0].strip().upper() != ref]
+        filas_ws = _filas(ws)
+        # los datos reservados (PRECIO ML) se conservan si esta llamada no los trae
+        conservar = [f for f in filas_ws if f[0].strip().upper() == ref
+                     and _clave(f[1]) in reservados and _clave(f[1]) not in tocados]
+        otras = [f for f in filas_ws if f[0].strip().upper() != ref] + conservar
         filas = sorted(otras + nuevas, key=lambda f: (f[0].strip().upper(), _clave(f[1])))
         if len(filas) + 1 > ws.row_count:
             ws.add_rows(len(filas) + 1 - ws.row_count + 100)
@@ -102,6 +114,43 @@ def guardar(ref: str, valores: dict[str, str], origenes: dict[str, str] | None =
     _reintentar_si_se_corta(escribir)
     logger.info("Ficha ML de %s guardada en %s: %d datos.", ref, HOJA, len(nuevas))
     return len(nuevas)
+
+
+def separar_precio(ficha: dict[str, str]) -> tuple[dict[str, str], int | None]:
+    """(ficha sin datos reservados, precio fijado o None)."""
+    limpia, precio = {}, None
+    for dato, valor in (ficha or {}).items():
+        if _clave(dato) == _clave(DATO_PRECIO):
+            digitos = "".join(ch for ch in str(valor) if ch.isdigit())
+            precio = int(digitos) if digitos else None
+        elif _clave(dato) not in {_clave(d) for d in RESERVADOS}:
+            limpia[dato] = valor
+    return limpia, precio
+
+
+def guardar_precio(ref: str, precio: int | None) -> None:
+    """Fija (o quita, con None) el precio ML de un producto en la pestaña FICHAS ML."""
+    from modules.servidor.google_sheet import _reintentar_si_se_corta
+
+    ref = ref.strip().upper()
+    if not ref:
+        raise ValueError("El producto no tiene REF INTERNA.")
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def escribir():
+        ws = _hoja(crear=True)
+        filas = [f for f in _filas(ws)
+                 if not (f[0].strip().upper() == ref and _clave(f[1]) == _clave(DATO_PRECIO))]
+        if precio:
+            filas.append([ref, DATO_PRECIO, str(int(precio)), ORIGEN_MANUAL, ahora])
+        filas.sort(key=lambda f: (f[0].strip().upper(), _clave(f[1])))
+        if len(filas) + 1 > ws.row_count:
+            ws.add_rows(len(filas) + 1 - ws.row_count + 100)
+        ws.update(range_name="A1", values=[ENCABEZADOS] + filas, value_input_option="RAW")
+        ws.batch_clear([f"A{len(filas) + 2}:E"])
+
+    _reintentar_si_se_corta(escribir)
+    logger.info("Precio ML de %s %s en %s.", ref, f"fijado en {precio}" if precio else "vuelve a automático", HOJA)
 
 
 def combinar(planilla: dict[str, str], ficha: dict[str, str],
