@@ -52,6 +52,7 @@ AUTH_URL = "https://auth.mercadolibre.cl/authorization"
 SITE_ID = "MLC"
 TOKENS_PATH = ROOT / "data" / "ml_tokens.json"
 _TIMEOUT = 20
+_ESPERAS_LIMITE = (2, 5, 10)  # segundos entre reintentos cuando ML responde 429 (demasiadas consultas)
 _MARGEN_EXPIRACION = 300  # renovar 5 min antes de que venza
 TOKENS_DRIVE_NOMBRE = "ml_tokens.json"
 
@@ -326,15 +327,32 @@ class MercadoLibreClient:
         url = path if path.startswith("http") else f"{API_URL}{path}"
         kwargs.setdefault("timeout", _TIMEOUT)
         token = None
-        for intento in (1, 2):
-            headers = kwargs.pop("headers", {}) or {}
+        base_headers = kwargs.pop("headers", {}) or {}
+
+        def enviar(renovar: bool):
+            nonlocal token
+            headers = dict(base_headers)
             if auth:
-                token = self._access_token(forzar_refresh=intento == 2, rechazado=token)
+                token = self._access_token(forzar_refresh=renovar, rechazado=token if renovar else None)
                 headers["Authorization"] = f"Bearer {token}"
-            resp = self.session.request(method, url, headers=headers, **kwargs)
-            if resp.status_code == 401 and auth and intento == 1:
-                continue  # token rechazado: renovar una vez y reintentar
+            return self.session.request(method, url, headers=headers, **kwargs)
+
+        renovado = False
+        for espera in _ESPERAS_LIMITE + (None,):
+            resp = enviar(False)
+            if resp.status_code == 401 and auth and not renovado:
+                renovado = True  # token rechazado: renovar una vez y reintentar
+                resp = enviar(True)
+            if resp.status_code == 429 and espera is not None:
+                # demasiadas consultas seguidas (local_rate_limited): esperar y reintentar
+                logger.info("ML pidió esperar (429) en %s %s; reintento en %s s", method, path, espera)
+                time.sleep(espera)
+                continue
             break
+        if resp.status_code == 429:
+            raise MercadoLibreError(
+                "Mercado Libre recibió demasiadas consultas seguidas y pidió esperar. "
+                "Vuelve a intentarlo en un minuto.", status=429, detalle="local_rate_limited")
         if resp.status_code >= 400:
             try:
                 detalle = resp.json()
@@ -355,7 +373,10 @@ class MercadoLibreClient:
 
     # -- consultas útiles --
     def usuario_actual(self) -> dict:
-        return self.get("/users/me")
+        """Cuenta conectada (/users/me). Se guarda en el cliente: no cambia durante una operación."""
+        if getattr(self, "_yo", None) is None:
+            self._yo = self.get("/users/me")
+        return self._yo
 
     def items(self, ids: list[str], attributes: str = "") -> list[dict]:
         """Datos de varias publicaciones, de a una con /items/{id}.

@@ -98,3 +98,29 @@ def test_info_envio_para_la_simulacion(monkeypatch):
     assert "5,5 kg" in texto and "volumétrico" in texto and "$1.330" in texto
     # el precio guardado no incluía el envío: avisa que La Loba recibiría menos que en el local
     assert any("Actualiza la lista" in a for a in res["avisos"])
+
+
+def test_reintenta_cuando_ml_pide_esperar(monkeypatch):
+    from modules.mercadolibre import client
+
+    class Resp:
+        def __init__(self, status, data=None):
+            self.status_code, self._data = status, data or {}
+            self.content = b"x"
+            self.text = ""
+
+        def json(self):
+            return self._data
+
+    respuestas = [Resp(429, {"message": "local_rate_limited"}), Resp(429), Resp(200, {"id": 7})]
+    monkeypatch.setattr(client.time, "sleep", lambda s: None)
+    c = client.MercadoLibreClient()
+    monkeypatch.setattr(c.session, "request", lambda *a, **k: respuestas.pop(0))
+    assert c.get("/x", auth=False) == {"id": 7}
+
+    respuestas[:] = [Resp(429)] * 4
+    try:
+        c.get("/x", auth=False)
+        raise AssertionError("debió fallar")
+    except client.MercadoLibreError as e:
+        assert e.status == 429 and "Vuelve a intentarlo" in str(e)
