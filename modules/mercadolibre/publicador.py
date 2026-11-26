@@ -387,7 +387,11 @@ def _revisar_envio(ml: MercadoLibreClient, p, res: dict) -> None:
         return
     recibe = p.precio_ml - (p.comision or 0) - costo
     info["lineas"].append(f"Recibiría La Loba: {_plata(recibe)} (precio en el local {_plata(p.precio_local or 0)})")
-    if costo > (p.envio or 0) and recibe < (p.precio_local or 0):
+    if getattr(p, "precio_ml_fijo", False):
+        if recibe < (p.precio_local or 0):
+            res["avisos"].append(f"Con el precio que fijaste ({_plata(p.precio_ml)}) La Loba recibiría "
+                                 f"{_plata(recibe)}, menos que en el local ({_plata(p.precio_local or 0)}).")
+    elif costo > (p.envio or 0) and recibe < (p.precio_local or 0):
         res["avisos"].append(
             f"El precio ML se calculó con {_plata(p.envio or 0)} de envío, pero Mercado Libre cobraría "
             f"{_plata(costo)}: La Loba recibiría menos que en el local. Actualiza la lista para recalcular el precio.")

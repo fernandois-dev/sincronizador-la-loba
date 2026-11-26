@@ -38,18 +38,18 @@ class MLFalso:
                 "list_cost": tarifa * (1 - rate), "currency_id": "CLP", "billable_weight": 5488,
                 "discount": {"rate": rate, "type": "mandatory", "promoted_amount": tarifa}}}}
         if ruta.endswith("/listing_prices"):
-            fee = round(params["price"] * 0.16)
-            return {"sale_fee_amount": 0, "sale_fee_details": {"gross_amount": fee}}
+            fee = round(params["price"] * 0.16)  # 16 % normal, hoy con 100 % de descuento
+            return {"sale_fee_amount": 0, "sale_fee_details": {"gross_amount": fee, "percentage_fee": 16}}
         raise AssertionError(ruta)
 
 
 def test_bajo_el_umbral_tambien_se_cobra_envio():
     cache = catalogo._CacheML(MLFalso(), "gold_special")
     precio, comision, envio = catalogo.calcular_precio_ml(cache, 3900, "MLC1642", "28x28x28", 1000)
-    assert precio < 9990
     assert envio == 1330                      # 1.900 con 30 % de descuento
+    assert comision == 0                      # hoy ML no cobra comisión (100 % de descuento)
+    assert precio == 5290                     # 3.900 + 1.330 → terminado en 90
     assert precio - comision - envio >= 3900  # La Loba recibe al menos lo del local
-    assert precio % 100 == 90
 
 
 def test_paquete_inflado_cuesta_mas():
@@ -124,3 +124,30 @@ def test_reintenta_cuando_ml_pide_esperar(monkeypatch):
         raise AssertionError("debió fallar")
     except client.MercadoLibreError as e:
         assert e.status == 429 and "Vuelve a intentarlo" in str(e)
+
+
+def test_calculadora_desde_lo_que_quiero_recibir():
+    cache = catalogo._CacheML(MLFalso(), "gold_special")
+    d = catalogo.precio_para_recibir(cache, 4500, "MLC1642", "28x28x28", 1000)
+    assert d["precio"] == 5890 and d["envio"] == 1330 and d["comision"] == 0
+    assert d["recibe"] >= 4500 and d["recibe"] - 4500 < 100
+    assert d["comision_normal"] == round(5890 * 0.16)
+    assert d["recibe_normal"] == 5890 - d["comision_normal"] - 1330
+
+    # pidiendo cubrir también la comisión normal sale más caro
+    seguro = catalogo.precio_para_recibir(cache, 4500, "MLC1642", "28x28x28", 1000, comision_normal=True)
+    assert seguro["precio"] > d["precio"] and seguro["recibe_normal"] >= 4500
+
+
+def test_calculadora_desde_un_precio():
+    cache = catalogo._CacheML(MLFalso(), "gold_special")
+    d = catalogo.desglose_precio(cache, "MLC1642", 4990, "28x28x28", 1000)
+    assert d == {"precio": 4990, "comision": 0, "comision_normal": 798, "envio": 1330,
+                 "recibe": 3660, "recibe_normal": 2862}
+
+
+def test_cruzar_tramo_de_9990_no_deja_precio_de_mas():
+    cache = catalogo._CacheML(MLFalso(), "gold_special")
+    d = catalogo.precio_para_recibir(cache, 8500, "MLC1642", "28x28x28", 1000)
+    # 8.500 + 1.330 = 9.830 → 9.890 (bajo 9.990, sigue en el tramo barato)
+    assert d["precio"] == 9890 and d["envio"] == 1330

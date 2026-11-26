@@ -390,13 +390,67 @@ def envio_vendedor(ml: MercadoLibreClient, medidas: str, peso: float, precio: in
 
 def monto_comision(respuesta: dict) -> int:
     """
-    Comisión por venta a usar en el precio. Desde nov-2026 Mercado Libre informa
-    sale_fee_amount = 0 en /listing_prices aunque el porcentaje siga vigente (16 % en Cojines);
-    el monto real viene en sale_fee_details.gross_amount. Se usa el mayor de los dos, para no
-    depender de un beneficio que puede ser temporal: si ML no cobra, La Loba recibe más.
+    Comisión NORMAL por venta (el % de la categoría, p. ej. 16 % en Cojines): viene en
+    sale_fee_details.gross_amount. Es lo que se cobraría sin descuentos.
     """
     detalle = respuesta.get("sale_fee_details") or {}
     return int(round(max(respuesta.get("sale_fee_amount") or 0, detalle.get("gross_amount") or 0)))
+
+
+def comision_vigente(respuesta: dict) -> int:
+    """
+    Comisión que Mercado Libre cobra HOY (sale_fee_amount): ya trae los descuentos de la
+    cuenta. Desde nov-2026 La Loba tiene 100 % de descuento en Clásica, así que es $0
+    (el simulador de costos de ML muestra lo mismo).
+    """
+    if respuesta.get("sale_fee_amount") is None:
+        return monto_comision(respuesta)
+    return int(round(respuesta.get("sale_fee_amount") or 0))
+
+
+def desglose_precio(cache: _CacheML, cat_id: str, precio: int, medidas: str = "",
+                    peso: float | None = None) -> dict:
+    """
+    Lo que pasa con una venta a `precio` en Mercado Libre, con lo que ML cobra hoy:
+    {"precio", "comision" (hoy), "comision_normal", "envio" (None si faltan medidas o peso),
+     "recibe" (con la comisión de hoy), "recibe_normal" (si ML cobrara la comisión normal)}.
+    """
+    r = cache.comision(cat_id, int(precio))
+    envio = cache.envio(medidas, peso, int(precio)) if (medidas and peso) else None
+    hoy, normal = comision_vigente(r), monto_comision(r)
+    return {"precio": int(precio), "comision": hoy, "comision_normal": normal, "envio": envio,
+            "recibe": int(precio) - hoy - (envio or 0), "recibe_normal": int(precio) - normal - (envio or 0)}
+
+
+def precio_para_recibir(cache: _CacheML, objetivo: float, cat_id: str, medidas: str = "",
+                        peso: float | None = None, comision_normal: bool = False) -> dict:
+    """
+    Precio en ML (terminado en 90) para recibir al menos `objetivo` después de la comisión
+    (la de hoy, o la normal si comision_normal) y del envío. Devuelve desglose_precio().
+    """
+    def neto(d):
+        return d["recibe_normal"] if comision_normal else d["recibe"]
+
+    p = float(objetivo)
+    for _ in range(8):  # punto fijo: comisión y envío dependen del precio
+        d = desglose_precio(cache, cat_id, max(int(round(p)), 1), medidas, peso)
+        nuevo = objetivo + (d["precio"] - neto(d))
+        if abs(nuevo - p) < 1:
+            break
+        p = nuevo
+    precio = _redondear(p)
+    for _ in range(40):  # por si el redondeo cambió de tramo (comisión o envío)
+        d = desglose_precio(cache, cat_id, precio, medidas, peso)
+        if neto(d) >= objetivo:
+            break
+        precio += 100
+    # bajar si sobra (al cruzar un tramo hacia abajo el envío puede ser menor)
+    while precio > 100:
+        menor = desglose_precio(cache, cat_id, precio - 100, medidas, peso)
+        if neto(menor) < objetivo:
+            break
+        precio, d = precio - 100, menor
+    return d
 
 
 def _redondear(p: float) -> int:
@@ -406,35 +460,14 @@ def _redondear(p: float) -> int:
 def calcular_precio_ml(cache: _CacheML, precio_local: float, cat_id: str, medidas: str = "",
                        peso: float | None = None, umbral: int = UMBRAL_ENVIO_GRATIS) -> tuple[int, int, int | None]:
     """
-    Precio ML tal que, descontadas la comisión real de Mercado Libre y el costo de envío que
-    ML le cobra a La Loba, se reciba al menos PRECIO LOCAL. El envío se cobra en todas las
-    ventas (bajo el umbral es una tarifa menor, pero no es cero), así que siempre se consulta.
-    Devuelve (precio_ml, comision, envio). envio es None si faltan medidas o peso para
-    calcularlo (no queda incluido). `umbral` se mantiene por compatibilidad: ML ya aplica
-    la tarifa que corresponde a cada precio.
+    Precio ML automático: lo justo para que, descontadas la comisión que Mercado Libre cobra
+    HOY y el costo de envío (se cobra en todas las ventas, también bajo el umbral), La Loba
+    reciba al menos PRECIO LOCAL. Devuelve (precio_ml, comision_hoy, envio); envio es None
+    si faltan medidas o peso. `umbral` queda por compatibilidad: ML ya aplica la tarifa de
+    cada precio. Para elegir otro precio está la calculadora de la vista previa.
     """
-    def envio_para(precio):
-        if not (medidas and peso):
-            return None
-        return cache.envio(medidas, peso, precio)
-
-    p = precio_local / 0.85
-    envio = 0
-    for _ in range(6):
-        fee = monto_comision(cache.comision(cat_id, int(round(p))))
-        envio = envio_para(int(round(p)))
-        nuevo = precio_local + fee + (envio or 0)
-        if abs(nuevo - p) < 1:
-            break
-        p = nuevo
-    precio = _redondear(p)
-    for _ in range(20):  # por si el redondeo cambió de tramo
-        fee = monto_comision(cache.comision(cat_id, precio))
-        envio = envio_para(precio)
-        if precio - fee - (envio or 0) >= precio_local:
-            break
-        precio += 100
-    return precio, fee, envio
+    d = precio_para_recibir(cache, precio_local, cat_id, medidas, peso)
+    return d["precio"], d["comision"], d["envio"]
 
 
 # ── fotos y stock ──────────────────────────────────────────────────────────────
@@ -528,14 +561,18 @@ def construir_catalogo() -> tuple[list[dict], list[str]]:
         if not titulo:
             titulo, titulo_prop = proponer_titulo(f["producto"], marca), True
 
-        precio_ml = comision = envio = 0
+        precio_ml = comision = comision_normal = envio = 0
+        ficha, precio_fijo = fichas.separar_precio(todas_las_fichas.get(f["ref"], {}))
         recargo = calcular_recargo(f.get("recargo_txt"), f["precio"])
         if not f["precio"]:
             pend.append("sin VENTA FLB")
         elif cat:
             try:
-                precio_ml, comision, envio = calcular_precio_ml(
-                    cache, f["precio"] + recargo, cat, f["medidas"], f["peso"], cfg["umbral_envio_gratis"])
+                if precio_fijo:  # lo eligió el usuario con la calculadora
+                    d = desglose_precio(cache, cat, precio_fijo, f["medidas"], f["peso"])
+                else:
+                    d = precio_para_recibir(cache, f["precio"] + recargo, cat, f["medidas"], f["peso"])
+                precio_ml, comision, comision_normal, envio = d["precio"], d["comision"], d["comision_normal"], d["envio"]
                 if envio is None:
                     envio = 0
                     if not f["medidas"]:
@@ -569,7 +606,7 @@ def construir_catalogo() -> tuple[list[dict], list[str]]:
             pend.append("la hoja no tiene columna " + ", ".join(sin_col))
 
         # datos de la categoría: columnas "<DATO> ML" > FICHAS ML > valores por defecto
-        atributos, origen = fichas.combinar(f["atributos"], todas_las_fichas.get(f["ref"], {}),
+        atributos, origen = fichas.combinar(f["atributos"], ficha,
                                             cache.por_defecto(cat) if cat else [])
         if cat:
             faltan_datos = datos_obligatorios_faltantes(cache.atributos(cat), atributos, f, marca, cfg)
@@ -597,7 +634,9 @@ def construir_catalogo() -> tuple[list[dict], list[str]]:
             "precio_local": int(round(f["precio"] or 0)),
             "recargo_ml": recargo,
             "precio_ml": precio_ml,
+            "precio_ml_fijo": bool(precio_fijo and precio_ml),
             "comision": comision,
+            "comision_normal": comision_normal,
             "stock": int(odoo[1]) if odoo else None,
             "peso_gr": int(f["peso"]) if f["peso"] else None,
             "medidas_paquete": f["medidas"],

@@ -18,7 +18,8 @@ from components.estilos import RADIO_BOTON, RADIO_CHIP, RADIO_TARJETA
 from components.loading import Loading
 from logger_config import get_logger
 from modules.ia import descripcion as descripcion_ia
-from modules.mercadolibre import catalogo, publicador
+from modules.mercadolibre import catalogo, fichas, publicador
+from modules.mercadolibre.client import MercadoLibreClient
 from modules.servidor.google_sheet import GoogleService
 from modules.servidor.components.datos_ml import FormularioDatosML
 from modules.servidor.models import ProductoML
@@ -498,18 +499,20 @@ class MercadoLibrePage(GenericPage):
                 border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT), padding=20)
 
         # ── columna derecha: lo que vería el comprador ──
-        recibe = p.precio_ml - p.comision - p.envio
         # Mercado Libre cobra el envío en todas las ventas; bajo el umbral la tarifa es menor
         # (el comprador paga su parte), desde el umbral el envío gratis es obligatorio.
-        gratis = p.precio_ml >= cfg["umbral_envio_gratis"]
         faltan_paquete = not (p.medidas_paquete and p.peso_gr)
-        if faltan_paquete:
-            texto_envio = "Falta MEDIDAS PAQUETE o PESO GR: el envío no está en el precio"
-            envio_desglose, color_envio = "⚠ no incluido", ft.Colors.RED_700
-        else:
-            texto_envio = "Envío gratis" if gratis else "Envío a cargo del comprador"
-            envio_desglose = "+ " + plata(p.envio)
-            color_envio = ft.Colors.GREEN_700 if gratis else tenue
+
+        def textos_envio():
+            """(texto bajo el precio, monto para el desglose, color) según el precio actual."""
+            if faltan_paquete:
+                return ("Falta MEDIDAS PAQUETE o PESO GR: el envío no está en el precio",
+                        "⚠ no incluido", ft.Colors.RED_700)
+            if p.precio_ml >= cfg["umbral_envio_gratis"]:
+                return "Envío gratis", "− " + plata(p.envio), ft.Colors.GREEN_700
+            return "Envío a cargo del comprador", "− " + plata(p.envio), tenue
+
+        texto_envio, envio_desglose, color_envio = textos_envio()
         facturable = catalogo.peso_facturable(p.medidas_paquete, p.peso_gr)
         if facturable:
             kg = f"{facturable[0]:.1f}".replace(".", ",")
@@ -538,6 +541,191 @@ class MercadoLibrePage(GenericPage):
                        spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ], spacing=0), width=165)
 
+        # ── lo que recibe La Loba: parte del precio de venta y resta lo que cobra ML hoy ──
+        txt_precio = ft.Text(plata(p.precio_ml), size=32, weight=ft.FontWeight.W_300)
+        icono_envio = ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, size=16, color=color_envio)
+        txt_envio = ft.Text(texto_envio, size=12, color=color_envio, weight=ft.FontWeight.W_500)
+        objetivo_auto = (p.precio_local or 0) + (p.recargo_ml or 0)
+
+        def lineas_desglose(d, local):
+            """Desglose de una venta: precio − comisión de hoy − envío = recibe (y si vuelve la normal)."""
+            sin_envio = d["envio"] is None
+            normal = d.get("comision_normal") or d["comision"]
+            diferencia = d["recibe"] - local
+            lineas = [
+                linea_precio("Precio en Mercado Libre", plata(d["precio"]), negrita=True),
+                linea_precio("Comisión Mercado Libre (lo que cobra hoy)", "− " + plata(d["comision"])),
+                linea_precio("Envío (lo cobra Mercado Libre en cada venta)",
+                             "⚠ no incluido" if sin_envio else "− " + plata(d["envio"]),
+                             color=ft.Colors.RED_700 if sin_envio else None),
+                ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
+                linea_precio("Recibe La Loba", plata(d["recibe"]), negrita=True, tamano=15,
+                             color=ft.Colors.GREEN_700 if diferencia >= 0 else ft.Colors.RED_700),
+                linea_precio("Comparado con el local (" + plata(local) + ")",
+                             ("+ " if diferencia >= 0 else "− ") + plata(abs(diferencia)),
+                             color=ft.Colors.GREEN_700 if diferencia >= 0 else ft.Colors.RED_700),
+            ]
+            if normal > d["comision"]:
+                lineas.append(ft.Text(
+                    f"Hoy Mercado Libre te descuenta la comisión (normal {plata(normal)}). "
+                    f"Si deja de hacerlo, recibirías {plata(d['recibe_normal'])}.",
+                    size=11, color=ft.Colors.AMBER_900))
+            return lineas
+
+        def desglose_actual():
+            return {"precio": p.precio_ml, "comision": p.comision, "comision_normal": p.comision_normal,
+                    "envio": None if faltan_paquete else p.envio,
+                    "recibe": p.precio_ml - p.comision - p.envio,
+                    "recibe_normal": p.precio_ml - (p.comision_normal or p.comision) - p.envio}
+
+        def contenido_recibe():
+            origen = ("Precio fijado por ti con la calculadora." if p.precio_ml_fijo else
+                      "Precio automático: lo justo para recibir lo mismo que en el local.")
+            return [*lineas_desglose(desglose_actual(), objetivo_auto),
+                    ft.Text(origen, size=11, color=tenue, italic=True)]
+
+        tarjeta_recibe = tarjeta("Lo que recibe La Loba", ft.Icons.PAYMENTS_OUTLINED, contenido_recibe(), expand=False)
+
+        def refrescar_precio():
+            nonlocal texto_envio, envio_desglose, color_envio
+            texto_envio, envio_desglose, color_envio = textos_envio()
+            txt_precio.value = plata(p.precio_ml)
+            txt_envio.value, txt_envio.color, icono_envio.color = texto_envio, color_envio, color_envio
+            tarjeta_recibe.content = tarjeta("Lo que recibe La Loba", ft.Icons.PAYMENTS_OUTLINED,
+                                             contenido_recibe(), expand=False).content
+            btn_auto.visible = p.precio_ml_fijo
+
+        # ── calculadora: precio de venta a partir de lo que quieres recibir (o al revés) ──
+        calc = {"cache": None, "d": None}
+
+        def _cache():
+            if calc["cache"] is None:
+                calc["cache"] = catalogo._CacheML(MercadoLibreClient(), cfg["tipo_publicacion"])
+            return calc["cache"]
+
+        def _numero(campo):
+            digitos = "".join(ch for ch in (campo.value or "") if ch.isdigit())
+            return int(digitos) if digitos else 0
+
+        campo_recibir = ft.TextField(label="Quiero recibir", prefix="$ ", value=str(objetivo_auto), width=160,
+                                     dense=True, text_size=13, keyboard_type=ft.KeyboardType.NUMBER,
+                                     input_filter=ft.NumbersOnlyInputFilter())
+        campo_precio = ft.TextField(label="Precio de venta en ML", prefix="$ ", value=str(p.precio_ml), width=160,
+                                    dense=True, text_size=13, keyboard_type=ft.KeyboardType.NUMBER,
+                                    input_filter=ft.NumbersOnlyInputFilter())
+        chk_normal = ft.Checkbox(label="Calcular con la comisión normal (por si Mercado Libre deja de descontarla)",
+                                 value=False, label_style=ft.TextStyle(size=12))
+        resultado_calc = ft.Column([], spacing=4, visible=False)
+        estado_calc = ft.Text("", size=12, visible=False)
+
+        def mostrar_estado(texto, color=None):
+            estado_calc.value, estado_calc.color, estado_calc.visible = texto, color, bool(texto)
+
+        async def calcular(desde_recibir: bool):
+            if not p.categoria_id:
+                mostrar_estado("Falta la categoría ML para calcular la comisión.", ft.Colors.RED_700)
+                self.page.update()
+                return
+            valor = _numero(campo_recibir if desde_recibir else campo_precio)
+            if valor <= 0:
+                mostrar_estado("Escribe un monto.", ft.Colors.RED_700)
+                self.page.update()
+                return
+            mostrar_estado("Consultando comisión y envío en Mercado Libre…", tenue)
+            btn_desde_recibir.disabled = btn_desde_precio.disabled = btn_usar.disabled = True
+            self.page.update()
+            try:
+                if desde_recibir:
+                    d = await asyncio.to_thread(catalogo.precio_para_recibir, _cache(), valor, p.categoria_id,
+                                                p.medidas_paquete, p.peso_gr, bool(chk_normal.value))
+                    campo_precio.value = str(d["precio"])
+                else:
+                    d = await asyncio.to_thread(catalogo.desglose_precio, _cache(), p.categoria_id, valor,
+                                                p.medidas_paquete, p.peso_gr)
+                    campo_recibir.value = str(d["recibe"])
+                calc["d"] = d
+                resultado_calc.controls = lineas_desglose(d, objetivo_auto)
+                resultado_calc.visible = True
+                mostrar_estado("")
+                btn_usar.disabled = d["precio"] == p.precio_ml and p.precio_ml_fijo
+            except Exception as ex:
+                logger.error("Calculadora de precio de %s.", p.ref_interna, exc_info=True)
+                mostrar_estado(f"No se pudo calcular: {ex}", ft.Colors.RED_700)
+            finally:
+                btn_desde_recibir.disabled = btn_desde_precio.disabled = False
+                self.page.update()
+
+        def _aplicar(d, fijo):
+            p.precio_ml, p.comision, p.comision_normal = d["precio"], d["comision"], d["comision_normal"]
+            p.envio, p.precio_ml_fijo = d["envio"] or 0, fijo
+            p.save(update_fields=["precio_ml", "comision", "comision_normal", "envio", "precio_ml_fijo"])
+            refrescar_precio()
+            self.update_filtered_view()
+            abrir_unico(self.page, dlg)
+
+        async def usar_precio(e):
+            d = calc["d"]
+            if not d:
+                return
+            mostrar_estado("Guardando el precio en la pestaña FICHAS ML…", tenue)
+            btn_usar.disabled = True
+            self.page.update()
+            try:
+                await asyncio.to_thread(fichas.guardar_precio, p.ref_interna, d["precio"])
+                _aplicar(d, True)
+                mostrar_estado(f"Listo: se publicará a {plata(d['precio'])}. Queda guardado en FICHAS ML.",
+                               ft.Colors.GREEN_700)
+            except Exception as ex:
+                logger.error("No se pudo fijar el precio de %s.", p.ref_interna, exc_info=True)
+                mostrar_estado(f"No se pudo guardar: {ex}", ft.Colors.RED_700)
+                btn_usar.disabled = False
+            self.page.update()
+
+        async def precio_automatico(e):
+            mostrar_estado("Volviendo al precio automático…", tenue)
+            self.page.update()
+            try:
+                d = await asyncio.to_thread(catalogo.precio_para_recibir, _cache(), objetivo_auto, p.categoria_id,
+                                            p.medidas_paquete, p.peso_gr)
+                await asyncio.to_thread(fichas.guardar_precio, p.ref_interna, None)
+                _aplicar(d, False)
+                campo_recibir.value, campo_precio.value = str(objetivo_auto), str(d["precio"])
+                resultado_calc.visible = False
+                mostrar_estado(f"Precio automático: {plata(d['precio'])}.", ft.Colors.GREEN_700)
+            except Exception as ex:
+                logger.error("No se pudo volver al precio automático de %s.", p.ref_interna, exc_info=True)
+                mostrar_estado(f"No se pudo: {ex}", ft.Colors.RED_700)
+            self.page.update()
+
+        async def calcular_desde_recibir(e):
+            await calcular(True)
+
+        async def calcular_desde_precio(e):
+            await calcular(False)
+
+        btn_desde_recibir = ft.FilledTonalButton("Calcular precio", icon=ft.Icons.CALCULATE_OUTLINED,
+                                                 on_click=calcular_desde_recibir)
+        btn_desde_precio = ft.OutlinedButton("Ver cuánto recibo", icon=ft.Icons.PAYMENTS_OUTLINED,
+                                             on_click=calcular_desde_precio)
+        btn_usar = ft.FilledButton("Usar este precio", icon=ft.Icons.CHECK, disabled=True,
+                                   on_click=usar_precio,
+                                   tooltip="Se guarda en la pestaña FICHAS ML y se usa al publicar")
+        btn_auto = ft.TextButton("Volver al precio automático", icon=ft.Icons.RESTART_ALT, visible=p.precio_ml_fijo,
+                                 on_click=precio_automatico)
+        campo_recibir.on_submit = calcular_desde_recibir
+        campo_precio.on_submit = calcular_desde_precio
+
+        calculadora = tarjeta("Calculadora de precio", ft.Icons.CALCULATE_OUTLINED, [
+            ft.Text("Escribe lo que quieres recibir y calcula a cuánto vender, o prueba un precio de venta. "
+                    "Usa la comisión y el envío que Mercado Libre cobra hoy a La Loba.", size=12, color=tenue),
+            ft.Row([campo_recibir, btn_desde_recibir], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([campo_precio, btn_desde_precio], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            chk_normal,
+            resultado_calc,
+            estado_calc,
+            ft.Row([btn_usar, btn_auto], spacing=8, wrap=True),
+        ], expand=False)
+
         # ── pestaña Resumen: lo que vería el comprador y lo que recibe La Loba ──
         resumen = ft.Column([
             ft.Row([ft.Text(p.titulo or p.producto, size=20, weight=ft.FontWeight.BOLD, selectable=True, expand=True),
@@ -550,26 +738,17 @@ class MercadoLibrePage(GenericPage):
                                                        selectable=True),
                     *propuesta(p.categoria_propuesta)], spacing=6, wrap=True),
             ft.Row([
-                ft.Text(plata(p.precio_ml), size=32, weight=ft.FontWeight.W_300),
+                txt_precio,
                 ft.Column([
-                    ft.Row([ft.Icon(ft.Icons.LOCAL_SHIPPING_OUTLINED, size=16, color=color_envio),
-                            ft.Text(texto_envio, size=12, color=color_envio, weight=ft.FontWeight.W_500)], spacing=6),
+                    ft.Row([icono_envio, txt_envio], spacing=6),
                     ft.Row([ft.Icon(ft.Icons.INVENTORY_2_OUTLINED, size=16,
                                     color=ft.Colors.RED_700 if cantidad <= 0 else tenue),
                             ft.Text(f"{cantidad} disponibles" if cantidad > 0 else "Sin stock para publicar",
                                     size=12, color=ft.Colors.RED_700 if cantidad <= 0 else None)], spacing=6),
                 ], spacing=2),
             ], spacing=24, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            tarjeta("Lo que recibe La Loba", ft.Icons.PAYMENTS_OUTLINED, [
-                linea_precio("Precio en el local", plata(p.precio_local)),
-                *([linea_precio("Recargo ML (embalaje u otros)", "+ " + plata(p.recargo_ml))] if p.recargo_ml else []),
-                linea_precio("Comisión Mercado Libre", "+ " + plata(p.comision)),
-                linea_precio("Envío (lo cobra Mercado Libre en cada venta)", envio_desglose,
-                             color=ft.Colors.RED_700 if envio_desglose.startswith("⚠") else None),
-                ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
-                linea_precio("Precio en Mercado Libre", plata(p.precio_ml), negrita=True),
-                linea_precio("Recibe La Loba", plata(recibe), negrita=True, color=ft.Colors.GREEN_700, tamano=15),
-            ], expand=False),
+            tarjeta_recibe,
+            calculadora,
             ft.Text("Detalles", size=13, weight=ft.FontWeight.BOLD),
             ft.Row([
                 detalle("SKU (REF INTERNA)", p.ref_interna, copiable=True),
