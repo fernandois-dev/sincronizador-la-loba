@@ -174,3 +174,48 @@ def test_formulario_en_la_vista_previa_guarda_en_fichas(monkeypatch, hoja, error
     guardado = ProductoML.objects.get(pk=p.pk)
     assert guardado.estado == catalogo.ESTADO_LISTO and guardado.pendientes == ""
     assert guardado.datos_ml["Formato de venta"] == "Unidad"
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_simular_muestra_el_resultado_en_una_ventana(monkeypatch, ok, errores_log):
+    """Al simular, el veredicto aparece de inmediato en su propia ventana; si se puede,
+    con el botón Publicar, y 'Volver' regresa a la vista previa."""
+    from modules.mercadolibre import publicador
+    from tests.apoyo import abrir_app, problemas_en_controles
+
+    monkeypatch.setattr(publicador, "miniaturas", lambda ref: [])
+    monkeypatch.setattr(publicador, "atributos_categoria", lambda cat, ml=None: ATRIBUTOS_COJINES)
+    resultado = {"ok": ok, "errores": [] if ok else ["Falta Cantidad de envases"],
+                 "avisos": ["La columna 'MATERIAL ML' no es un dato de esta categoría: se ignora."]}
+    monkeypatch.setattr(publicador, "simular", lambda p, ml=None: resultado)
+
+    async def prueba():
+        app = await abrir_app()
+        p = _producto(estado=catalogo.ESTADO_LISTO, pendientes="", ref_interna=f"SIM{int(ok)}")
+        await asyncio.to_thread(p.save)
+        app.ir("/mercado_libre/productos")
+        await app.esperar()
+        pagina = app.page.controls[0].control_page.content
+        await pagina.vista_previa.ahora(pagina, [p])
+        vista = next(d for d in app.page._dialogs.controls if d.open)
+        boton_simular = next(b for b in vista.actions if getattr(b, "content", None) == "Simular publicación")
+        await boton_simular.on_click(None)
+        await app.esperar()
+
+        abiertos = [d for d in app.page._dialogs.controls if d.open]
+        assert len(abiertos) == 1 and abiertos[0] is not vista
+        ventana = abiertos[0]
+        titulo = ventana.content.controls[0].content.controls[1].controls[0].value
+        assert titulo == ("Se puede publicar" if ok else "No se puede publicar todavía")
+        textos = [b.content for b in ventana.actions]
+        assert ("Publicar" in textos) == ok
+        assert problemas_en_controles(app.page) == []
+
+        volver = next(b for b in ventana.actions if b.content == "Volver a la vista previa")
+        volver.on_click(None)
+        await app.esperar()
+        assert [d for d in app.page._dialogs.controls if d.open] == [vista]
+        assert app.errores_envio == []
+        await app.terminar()
+
+    asyncio.run(prueba())
