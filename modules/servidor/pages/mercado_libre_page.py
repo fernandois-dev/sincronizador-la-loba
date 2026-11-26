@@ -715,7 +715,9 @@ class MercadoLibrePage(GenericPage):
                 *[ft.Text(f"✖ {x}", size=12, color=ft.Colors.RED_700) for x in r["errores"]],
                 *[ft.Text(f"⚠ {x}", size=12, color=ft.Colors.AMBER_900) for x in r["avisos"]],
             ], spacing=4)
-            abrir_unico(self.page, dlg)
+            # El resultado se muestra de inmediato en su propia ventana (queda también al final
+            # de la vista previa como referencia).
+            self._resultado_simulacion(p, r, cantidad, lambda: abrir_unico(self.page, dlg))
 
         encabezado = ft.Row([
             ft.Icon(ft.Icons.STOREFRONT, color=ft.Colors.PRIMARY),
@@ -813,6 +815,61 @@ class MercadoLibrePage(GenericPage):
                      ft.FilledButton("Sí, publicar", icon=ft.Icons.PUBLISH, on_click=confirmar)],
         )
         abrir_unico(self.page, conf)
+
+    def _resultado_simulacion(self, p, r, cantidad, volver):
+        """Ventana con el veredicto de la simulación: si Mercado Libre la aceptaría, qué la
+        bloquea y qué avisos hay. Si se puede, ofrece publicar desde ahí."""
+        ok = r["ok"]
+        color = ft.Colors.GREEN_700 if ok else ft.Colors.RED_700
+        puede_publicar = ok and not p.ml_item_id and p.estado in self._PUBLICABLES and cantidad > 0
+
+        def seccion(titulo, icono, color_txt, lineas):
+            return ft.Column([
+                ft.Row([ft.Icon(icono, size=16, color=color_txt),
+                        ft.Text(titulo, size=13, weight=ft.FontWeight.BOLD, color=color_txt)], spacing=6),
+                *[ft.Text(f"• {x}", size=12, selectable=True) for x in lineas],
+            ], spacing=4)
+
+        contenido = [ft.Container(
+            ft.Row([ft.Icon(ft.Icons.CHECK_CIRCLE if ok else ft.Icons.CANCEL, color=color, size=36),
+                    ft.Column([
+                        ft.Text("Se puede publicar" if ok else "No se puede publicar todavía",
+                                size=20, weight=ft.FontWeight.BOLD, color=color),
+                        ft.Text("Mercado Libre la aceptaría tal como está (no se publicó nada)." if ok else
+                                "Mercado Libre la rechazaría. Corrige lo que aparece abajo y vuelve a simular.",
+                                size=12),
+                    ], spacing=2, expand=True)], spacing=12),
+            bgcolor=ft.Colors.with_opacity(0.08, color), border=ft.Border.all(1, color),
+            border_radius=RADIO_TARJETA, padding=14)]
+        if r["errores"]:
+            contenido.append(seccion("Lo que impide publicar", ft.Icons.ERROR_OUTLINE, ft.Colors.RED_700,
+                                     r["errores"]))
+        if r["avisos"]:
+            contenido.append(seccion("Avisos (no impiden publicar)", ft.Icons.WARNING_AMBER, ft.Colors.AMBER_900,
+                                     r["avisos"]))
+        if ok and not puede_publicar and not p.ml_item_id:
+            motivo = "sin stock disponible" if cantidad <= 0 else p.estado.lower()
+            contenido.append(ft.Text(f"Para publicar falta resolver: {motivo}.", size=12, italic=True))
+
+        def volver_a_vista(e=None):
+            cerrar_dialogo(self.page, res)
+            volver()
+
+        def publicar(e):
+            cerrar_dialogo(self.page, res)
+            self._confirmar_publicar(p, cantidad, volver)
+
+        res = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Simulación · {p.ref_interna} · {p.titulo or p.producto}", size=16),
+            content=ft.Column(contenido, tight=True, spacing=12, width=560, scroll=ft.ScrollMode.AUTO),
+            actions=[
+                ft.TextButton("Volver a la vista previa", icon=ft.Icons.ARROW_BACK, on_click=volver_a_vista),
+                *([ft.FilledButton("Publicar", icon=ft.Icons.PUBLISH, on_click=publicar)] if puede_publicar else []),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        abrir_unico(self.page, res)
 
     def _resultado_publicacion(self, p, r):
         color = ft.Colors.GREEN_700 if r["ok"] else ft.Colors.RED_700
